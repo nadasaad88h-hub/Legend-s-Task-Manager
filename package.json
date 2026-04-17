@@ -1,3 +1,12 @@
-"scripts": {
-  "start": "node index.js"
+{
+  "name": "legends-task-manager",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.0.0",
+    "better-sqlite3": "^11.0.0"
+  }
 }
