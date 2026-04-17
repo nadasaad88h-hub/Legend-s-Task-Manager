@@ -6,7 +6,6 @@ const { Client, GatewayIntentBits } = require("discord.js");
 const TOKEN = process.env.DISCORD_TOKEN;
 
 // ───── IMPORT SYSTEM MODULES ─────
-// (These files you will create later inside folders)
 const ticketHandler = require("./tickets/handler");
 const taskHandler = require("./tasks/handler");
 const joinTracker = require("./joinTracker/handler");
@@ -27,16 +26,33 @@ client.once("ready", () => {
   console.log(`✅ Bot Online: ${client.user.tag}`);
 });
 
-// ───── INTERACTIONS (Buttons / Slash Commands) ─────
+// ───── INTERACTIONS (SAFE ROUTER) ─────
 client.on("interactionCreate", async (interaction) => {
   try {
-    // Send interaction to all systems
-    await ticketHandler(interaction, client);
-    await taskHandler(interaction, client);
-    await countingHandler(interaction, client);
+    // Ignore anything we don't handle
+    if (!interaction.isButton() && !interaction.isChatInputCommand()) return;
+
+    // Run each system safely (no crashing chain)
+    try {
+      await ticketHandler(interaction, client);
+    } catch (err) {
+      console.error("Ticket Handler Error:", err);
+    }
+
+    try {
+      await taskHandler(interaction, client);
+    } catch (err) {
+      console.error("Task Handler Error:", err);
+    }
+
+    try {
+      await countingHandler(interaction, client);
+    } catch (err) {
+      console.error("Counting Handler Error:", err);
+    }
 
   } catch (err) {
-    console.error("Interaction Error:", err);
+    console.error("Interaction Router Error:", err);
   }
 });
 
