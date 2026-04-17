@@ -1,5 +1,5 @@
 "use strict";
 
-module.exports = async (interaction, client) => {
+module.exports = async (member, client) => {
   // placeholder
 };
