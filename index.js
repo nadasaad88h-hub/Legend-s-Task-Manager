@@ -1,11 +1,18 @@
 "use strict";
 
-const { Client, GatewayIntentBits } = require("discord.js");
+const { 
+  Client, 
+  GatewayIntentBits, 
+  REST, 
+  Routes, 
+  SlashCommandBuilder 
+} = require("discord.js");
 
 // ───── CONFIG ─────
 const TOKEN = process.env.DISCORD_TOKEN;
+const CLIENT_ID = process.env.CLIENT_ID;
 
-// ───── IMPORT SYSTEM MODULES ─────
+// ───── SYSTEM MODULES ─────
 const ticketHandler = require("./tickets/handler");
 const taskHandler = require("./tasks/handler");
 const joinTracker = require("./joinTracker/handler");
@@ -21,38 +28,48 @@ const client = new Client({
   ],
 });
 
+// ───── SLASH COMMANDS ─────
+const commands = [
+  new SlashCommandBuilder()
+    .setName("ping")
+    .setDescription("Check if bot is alive")
+    .toJSON()
+];
+
+const rest = new REST({ version: "10" }).setToken(TOKEN);
+
+// ───── REGISTER COMMANDS ─────
+async function registerCommands() {
+  try {
+    console.log("Registering slash commands...");
+
+    await rest.put(
+      Routes.applicationCommands(CLIENT_ID),
+      { body: commands }
+    );
+
+    console.log("Slash commands registered!");
+  } catch (err) {
+    console.error("Command register error:", err);
+  }
+}
+
 // ───── READY ─────
-client.once("ready", () => {
+client.once("ready", async () => {
   console.log(`✅ Bot Online: ${client.user.tag}`);
+
+  // auto register slash commands
+  await registerCommands();
 });
 
-// ───── INTERACTIONS (SAFE ROUTER) ─────
+// ───── INTERACTIONS ─────
 client.on("interactionCreate", async (interaction) => {
   try {
-    // Ignore anything we don't handle
-    if (!interaction.isButton() && !interaction.isChatInputCommand()) return;
-
-    // Run each system safely (no crashing chain)
-    try {
-      await ticketHandler(interaction, client);
-    } catch (err) {
-      console.error("Ticket Handler Error:", err);
-    }
-
-    try {
-      await taskHandler(interaction, client);
-    } catch (err) {
-      console.error("Task Handler Error:", err);
-    }
-
-    try {
-      await countingHandler(interaction, client);
-    } catch (err) {
-      console.error("Counting Handler Error:", err);
-    }
-
+    await ticketHandler(interaction, client);
+    await taskHandler(interaction, client);
+    await countingHandler(interaction, client);
   } catch (err) {
-    console.error("Interaction Router Error:", err);
+    console.error("Interaction Error:", err);
   }
 });
 
