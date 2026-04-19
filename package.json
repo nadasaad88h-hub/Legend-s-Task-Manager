@@ -10,7 +10,7 @@
     "discord.js": "^14.14.1",
     "@discordjs/rest": "^2.2.0",
     "discord-api-types": "^0.37.67",
-    "better-sqlite3": "^9.4.3",
+    "sqlite3": "^5.1.7",
     "dotenv": "^16.4.5"
   },
   "engines": {
