@@ -1,12 +1,19 @@
 {
-  "name": "legends-task-manager",
+  "name": "staff-management-bot",
   "version": "1.0.0",
+  "description": "Discord staff task and verification system",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "discord.js": "^14.0.0",
-    "better-sqlite3": "^11.0.0"
+    "discord.js": "^14.14.1",
+    "@discordjs/rest": "^2.2.0",
+    "discord-api-types": "^0.37.67",
+    "better-sqlite3": "^9.4.3",
+    "dotenv": "^16.4.5"
+  },
+  "engines": {
+    "node": ">=16.11.0"
   }
 }
