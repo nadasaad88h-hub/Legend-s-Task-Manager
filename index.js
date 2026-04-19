@@ -120,11 +120,11 @@ client.on("messageCreate", async (message) => {
   if (message.content.startsWith("!")) {
     const cmd = message.content.split(" ")[0].toLowerCase();
     if (cmd === "!points") {
-      const row = db.getPoints(message.author.id) || { points: 0 };
+      const row = (await db.getPoints(message.author.id)) || { points: 0 };
       return message.reply(`⭐ ${row.points} points`);
     }
     if (cmd === "!leaderboard") {
-      const top = db.getLeaderboard();
+      const top = await db.getLeaderboard();
       return message.reply(top.slice(0, 10).map((u, i) => `${i + 1}. <@${u.staffId}> - ${u.points}`).join("\n") || "No data");
     }
     return;
@@ -203,17 +203,17 @@ client.on("messageCreate", async (message) => {
       if (!approver || !approver.roles.cache.has(MID_APPROVAL)) return message.react("❌");
 
       const rolesToSave = target.roles.cache.filter(r => ranks.includes(r.id)).map(r => r.id);
-      db.saveTermination(target.id, rolesToSave);
+      await db.saveTermination(target.id, rolesToSave);
       await target.roles.remove(rolesToSave);
       return message.react("✅");
     }
 
     if (type === "termination-revert") {
       if (reason.length < 15 || !approverId || approverId === message.author.id) return message.react("❌");
-      const saved = db.getTermination(target.id);
+      const saved = await db.getTermination(target.id);
       if (!saved) return message.react("❌");
       for (const r of saved.roles) await target.roles.add(r).catch(() => {});
-      db.deleteTermination(target.id);
+      await db.deleteTermination(target.id);
       return message.react("✅");
     }
 
