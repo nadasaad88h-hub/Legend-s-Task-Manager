@@ -9,6 +9,16 @@ const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 
+// ================= ENV VALIDATION =================
+if (!TOKEN || !CLIENT_ID || !GUILD_ID) {
+  console.error(
+    "[ERROR] Missing required environment variables: " +
+    [!TOKEN && "DISCORD_TOKEN", !CLIENT_ID && "CLIENT_ID", !GUILD_ID && "GUILD_ID"]
+      .filter(Boolean)
+      .join(", ")
+  );
+}
+
 // ================= CHANNEL =================
 const LOG_CHANNEL = "1494273679951925248";
 
@@ -72,11 +82,15 @@ const client = new Client({
 const commands = [
   new SlashCommandBuilder().setName("verify").setDescription("Verify yourself").toJSON()
 ];
-const rest = new REST({ version: "10" }).setToken(TOKEN);
+const rest = TOKEN ? new REST({ version: "10" }).setToken(TOKEN) : null;
 
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
-  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+  if (rest && TOKEN && CLIENT_ID && GUILD_ID) {
+    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+  } else {
+    console.error("[ERROR] Skipping slash command registration: TOKEN, CLIENT_ID, or GUILD_ID is missing.");
+  }
 });
 
 // ================= HELPERS =================
