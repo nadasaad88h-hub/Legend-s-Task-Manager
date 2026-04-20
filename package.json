@@ -1,7 +1,7 @@
 {
-  "name": "staff-management-bot",
+  "name": "lagging-legends-bot",
   "version": "1.0.0",
-  "description": "Discord staff management system",
+  "description": "Staff management system for Lagging Legends",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -11,7 +11,6 @@
     "@discordjs/rest": "^2.2.0",
     "discord-api-types": "^0.37.67",
     "sqlite3": "^5.1.7",
-    "better-sqlite3": "^9.4.3",
     "dotenv": "^16.4.5"
   },
   "engines": {
