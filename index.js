@@ -1,6 +1,6 @@
 "use strict";
 
-const { Client, GatewayIntentBits, SlashCommandBuilder, Routes, Events, EmbedBuilder } = require("discord.js");
+const { Client, GatewayIntentBits, SlashCommandBuilder, Routes, Events } = require("discord.js");
 const { REST } = require("@discordjs/rest");
 const db = require("./db");
 
@@ -61,14 +61,11 @@ client.once(Events.ClientReady, async (c) => {
   } catch (e) { console.error(e); }
 });
 
-const getRank = (member) => ranks.find(r => member.roles.cache.has(r));
-const getRankIndex = (id) => ranks.indexOf(id);
-
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   const { commandName, options, member, user, guild } = interaction;
 
-  // ALL RESPONSES PRIVATE
+  // ENSURE ALL REPLIES ARE PRIVATE
   await interaction.deferReply({ ephemeral: true });
 
   const isStaff = member.roles.cache.has(SUPPORT) || member.roles.cache.has(MOD);
@@ -82,55 +79,57 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (commandName === "points") {
       const row = db.getPoints(user.id);
-      return interaction.editReply(`⭐ You have **${row ? row.points : 0}** points.`);
+      return interaction.editReply(`⭐ You have **${row?.points ?? 0}** points.`);
     }
 
     if (commandName === "leaderboard") {
       let top = db.getLeaderboard() || [];
       const userRow = db.getPoints(user.id);
-      const list = top.slice(0, 10).map((u, i) => `${i + 1}. <@${u.staffId}> (${u.points} Points)`).join("\n") || "No data.";
-      return interaction.editReply(`🏆 **Points Leaderboard!**\n\n${list}\n\n**You:** <@${user.id}> (${userRow ? userRow.points : 0} Points)`);
+      const displayCount = top.length < 10 ? top.length : 10;
+      let list = top.slice(0, displayCount).map((u, i) => `${i + 1}. <@${u.staffId}> (${u.points} Points)`).join("\n") || "No staff data available yet.";
+      return interaction.editReply(`🏆 **Points Leaderboard!**\n\n${list}\n\n**You:** <@${user.id}> (${userRow?.points ?? 0} Points)`);
     }
 
     if (["statistics", "check_quota", "quota_excuse", "punish"].includes(commandName)) {
         if (!isStaff) return interaction.editReply("🛡️ Access Denied: Staff only.");
         
         if (commandName === "punish") {
-            const target = options.getMember("target");
+            const targetMember = options.getMember("target");
             const type = options.getString("type");
             const reason = options.getString("reason");
-            if (!target) return interaction.editReply("❌ Target not found.");
+
+            if (!targetMember) return interaction.editReply("❌ Target not found in the server.");
 
             const punishPoints = { "Verbal Warning": 1, "Staff Warning": 2, "Strike": 3 };
-            db.addPoints(target.id, punishPoints[type]);
+            db.addPoints(targetMember.id, punishPoints[type]);
 
-            const dmEmbed = new EmbedBuilder()
-                .setTitle("# LAGGING LEGENDS_COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT")
-                .setDescription(`Greetings, <@${target.id}>.\n\nThis is an official notice regarding a disciplinary action taken against your staff position in **Lagging Legends**.`)
-                .addFields(
-                    { name: "Type", value: type, inline: true },
-                    { name: "Reason", value: reason },
-                    { name: "Issued By", value: `<@${user.id}>` }
-                )
-                .setColor(0xFF0000)
-                .setTimestamp()
-                .setFooter({ text: "Lagging Legends Administration" });
+            const dmMessage = `# LAGGING LEGENDS_COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT
 
-            await target.send({ embeds: [dmEmbed] }).catch(() => console.log("DM Failed."));
-            return interaction.editReply(`✅ Successfully issued **${type}** to ${target.user.tag}.`);
+Greetings, <@${targetMember.id}>.
+
+This is an official notice regarding a disciplinary action taken against your staff position in **Lagging Legends**.
+
+**Type:** ${type}
+**Reason:** ${reason}
+**Issued By:** <@${user.id}>
+
+*Lagging Legends Administration*`;
+
+            await targetMember.send(dmMessage).catch(() => console.log(`Could not DM ${targetMember.user.tag}`));
+            return interaction.editReply(`✅ Successfully issued **${type}** to ${targetMember.user.tag}.`);
         }
 
         if (commandName === "statistics") {
-            const stats = db.getPoints(user.id) || { points: 0 };
-            return interaction.editReply(`📊 **Staff Statistics**\nPoints Earned: ${stats.points}`);
+            const stats = db.getPoints(user.id);
+            return interaction.editReply(`📊 **Staff Statistics**\nPoints Earned: **${stats?.points ?? 0}**`);
         }
 
         if (commandName === "check_quota") {
-            return interaction.editReply("📅 **Quota Status**: You have completed 0/5 logs for this week.");
+            return interaction.editReply("📅 **Quota Status**: 0/5 logs completed this week.");
         }
 
         if (commandName === "quota_excuse") {
-            return interaction.editReply("✅ **Excuse Submitted**. Staff management will review this shortly.");
+            return interaction.editReply("✅ **Excuse Submitted**.");
         }
     }
 
@@ -138,23 +137,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (!member.roles.cache.has(DEPT_PUNISH_PERM)) return interaction.editReply("🛡️ Access Denied.");
       const targetMember = options.getMember("target");
       const roleInput = options.getString("role").toLowerCase();
-      
-      // FIXED LOGIC: Looks for exact name or [DEPT] prefix to prevent accidental role removal
-      const deptRole = guild.roles.cache.find(r => 
-        r.name.toLowerCase() === roleInput || 
-        r.name.toLowerCase() === `[dept] ${roleInput}`
-      );
+      const deptRole = guild.roles.cache.find(r => r.name.toLowerCase() === roleInput || r.name.toLowerCase() === `[dept] ${roleInput}`);
 
-      if (!targetMember || !deptRole) return interaction.editReply("❌ Target not found or Role not found. (Make sure to type the role name correctly).");
+      if (!targetMember || !deptRole) return interaction.editReply("❌ Role or Target not found.");
       
-      await targetMember.roles.remove(deptRole).catch((e) => {
-          return interaction.editReply("❌ I don't have permission to remove that role.");
-      });
-      
-      return interaction.editReply(`✅ Removed **${deptRole.name}** from ${targetMember.user.tag}`);
+      // Safety check for role hierarchy
+      if (deptRole.position >= guild.members.me.roles.highest.position) {
+          return interaction.editReply("❌ I cannot remove this role because it is higher than mine in the role list.");
+      }
+
+      await targetMember.roles.remove(deptRole).catch(() => {});
+      return interaction.editReply(`✅ Removed **${deptRole.name}**.`);
     }
 
-  } catch (err) { console.error(err); }
+  } catch (err) { 
+    console.error("Interaction Error:", err); 
+    if (interaction.deferred) await interaction.editReply("⚠️ An internal error occurred.");
+  }
 });
 
 client.login(TOKEN);
