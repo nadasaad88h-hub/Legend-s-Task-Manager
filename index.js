@@ -87,7 +87,10 @@ const rest = TOKEN ? new REST({ version: "10" }).setToken(TOKEN) : null;
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
   if (rest && TOKEN && CLIENT_ID && GUILD_ID) {
-    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+    if (!CLIENT_ID || !GUILD_ID) {
+  console.log("❌ Missing CLIENT_ID or GUILD_ID");
+  return;
+}
   } else {
     console.error("[ERROR] Skipping slash command registration: TOKEN, CLIENT_ID, or GUILD_ID is missing.");
   }
