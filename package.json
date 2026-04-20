@@ -1,7 +1,7 @@
 {
   "name": "staff-management-bot",
   "version": "1.0.0",
-  "description": "Discord staff management and verification system",
+  "description": "Discord staff management system",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -10,6 +10,7 @@
     "discord.js": "^14.14.1",
     "@discordjs/rest": "^2.2.0",
     "discord-api-types": "^0.37.67",
+    "sqlite3": "^5.1.7",
     "better-sqlite3": "^9.4.3",
     "dotenv": "^16.4.5"
   },
