@@ -21,7 +21,6 @@ const VERIFIED_ROLE = "1494279460373926030";
 const SUPPORT = "1494277529614159893";
 const MOD = "1494276990700753018";
 const MID_APPROVAL = "1494278992402972733";
-const HIGH_APPROVAL = "1494275089963810967";
 const DEPT_PUNISH_PERM = "1494275524766208081";
 
 const ranks = [
@@ -30,8 +29,6 @@ const ranks = [
   "1494920425346433045", "1494920607366647979", "1494920909130301490", 
   "1494921290061053992"
 ];
-
-const SPECIAL_ROLES = ["1494922588428697654", "1494921889313984552"];
 
 // ================= SLASH COMMANDS =================
 const commands = [
@@ -87,36 +84,45 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   const { commandName, options, member, guild } = interaction;
 
-  if (commandName === "verify") {
-    if (member.roles.cache.has(VERIFIED_ROLE)) return interaction.reply({ content: "Already verified.", ephemeral: true });
-    await member.roles.remove(UNVERIFIED_ROLE).catch(() => {});
-    await member.roles.add(VERIFIED_ROLE).catch(() => {});
-    return interaction.reply({ content: "Verified!", ephemeral: true });
-  }
+  // Acknowledge quickly to prevent "did not respond"
+  await interaction.deferReply({ ephemeral: (commandName === 'verify') });
 
-  if (commandName === "points") {
-    const row = db.getPoints(member.id) || { points: 0 };
-    return interaction.reply(`⭐ You have ${row.points} points.`);
-  }
+  try {
+    if (commandName === "verify") {
+      if (member.roles.cache.has(VERIFIED_ROLE)) return interaction.editReply("Already verified.");
+      await member.roles.remove(UNVERIFIED_ROLE).catch(() => {});
+      await member.roles.add(VERIFIED_ROLE).catch(() => {});
+      return interaction.editReply("Verified!");
+    }
 
-  if (commandName === "leaderboard") {
-    const top = db.getLeaderboard();
-    const text = top.slice(0, 10).map((u, i) => `${i + 1}. <@${u.staffId}> - ${u.points}`).join("\n") || "No data";
-    return interaction.reply({ content: `🏆 **Leaderboard**\n${text}` });
-  }
+    if (commandName === "points") {
+      const row = db.getPoints(member.id) || { points: 0 };
+      return interaction.editReply(`⭐ You have ${row.points} points.`);
+    }
 
-  if (commandName === "dept_punish") {
-    if (!member.roles.cache.has(DEPT_PUNISH_PERM)) return interaction.reply({ content: "🛡️ Access Denied.", ephemeral: true });
-    const targetMember = options.getMember("target");
-    const roleInput = options.getString("role").toLowerCase();
-    const deptRole = guild.roles.cache.find(r => r.name.toLowerCase() === `[dept] ${roleInput}` || r.name.toLowerCase() === roleInput);
-    if (!targetMember || !deptRole) return interaction.reply({ content: "❌ Target or Role not found.", ephemeral: true });
-    await targetMember.roles.remove(deptRole).catch(() => {});
-    return interaction.reply(`✅ Removed ${deptRole.name} from ${targetMember.user.tag}`);
+    if (commandName === "leaderboard") {
+      let top = db.getLeaderboard();
+      if (!Array.isArray(top)) top = []; // FIX: Ensures .slice() won't crash
+      const text = top.slice(0, 10).map((u, i) => `${i + 1}. <@${u.staffId}> - ${u.points}`).join("\n") || "No data";
+      return interaction.editReply(`🏆 **Leaderboard**\n${text}`);
+    }
+
+    if (commandName === "dept_punish") {
+      if (!member.roles.cache.has(DEPT_PUNISH_PERM)) return interaction.editReply("🛡️ Access Denied.");
+      const targetMember = options.getMember("target");
+      const roleInput = options.getString("role").toLowerCase();
+      const deptRole = guild.roles.cache.find(r => r.name.toLowerCase() === `[dept] ${roleInput}` || r.name.toLowerCase() === roleInput);
+      if (!targetMember || !deptRole) return interaction.editReply("❌ Target or Role not found.");
+      await targetMember.roles.remove(deptRole).catch(() => {});
+      return interaction.editReply(`✅ Removed ${deptRole.name} from ${targetMember.user.tag}`);
+    }
+  } catch (err) {
+    console.error(err);
+    if (interaction.deferred) await interaction.editReply("⚠️ An error occurred.");
   }
 });
 
-// ================= MESSAGE HANDLER (FOR LOG CHANNEL FORMAT) =================
+// ================= MESSAGE HANDLER (LOGS) =================
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot || message.channel.id !== LOG_CHANNEL) return;
 
@@ -137,7 +143,6 @@ client.on(Events.MessageCreate, async (message) => {
     const senderRank = getRank(message.member);
     const senderIndex = senderRank ? getRankIndex(senderRank) : -1;
 
-    // PROMOTE / DEMOTE
     if (type === "promotion" || type === "demotion") {
       const currentRank = getRank(target);
       if (!currentRank || senderIndex <= getRankIndex(currentRank)) return message.react("🛡️");
@@ -154,7 +159,6 @@ client.on(Events.MessageCreate, async (message) => {
       return message.react("✅");
     }
 
-    // TERMINATION
     if (type === "termination") {
       if (reason.length < 17 || !approverId) return message.react("❌");
       const rolesToSave = target.roles.cache.filter(r => ranks.includes(r.id)).map(r => r.id);
@@ -170,7 +174,6 @@ client.on(Events.MessageCreate, async (message) => {
       db.deleteTermination(target.id);
       return message.react("✅");
     }
-
   } catch (err) { console.error(err); }
 });
 
