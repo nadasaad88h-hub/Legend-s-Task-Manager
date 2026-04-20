@@ -1,7 +1,7 @@
 "use strict";
 
-const { Client, GatewayIntentBits, SlashCommandBuilder } = require("discord.js");
-const { REST, Routes } = require("@discordjs/rest");
+const { Client, GatewayIntentBits, SlashCommandBuilder, Routes, PermissionFlagsBits, Events } = require("discord.js");
+const { REST } = require("@discordjs/rest"); // FIX: Correct REST import
 const db = require("./db");
 
 // ================= ENV =================
@@ -9,59 +9,17 @@ const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 
-// ================= ENV VALIDATION =================
-if (!TOKEN || !CLIENT_ID || !GUILD_ID) {
-  console.error(
-    "[ERROR] Missing required environment variables: " +
-    [!TOKEN && "DISCORD_TOKEN", !CLIENT_ID && "CLIENT_ID", !GUILD_ID && "GUILD_ID"]
-      .filter(Boolean)
-      .join(", ")
-  );
-}
-
-// ================= CHANNEL =================
+// ================= CONSTANTS =================
 const LOG_CHANNEL = "1494273679951925248";
-
-// ================= ROLES =================
 const UNVERIFIED_ROLE = "1494279535108292709";
 const VERIFIED_ROLE = "1494279460373926030";
-
 const SUPPORT = "1494277529614159893";
 const MOD = "1494276990700753018";
 const HIGH_APPROVAL = "1494275089963810967";
 const MID_APPROVAL = "1494278992402972733";
-
 const DEPT_PUNISH_PERM = "1494275524766208081";
-
-// ================= DEPARTMENT ROLES =================
-// Map the names exactly as staff will type them to their IDs
-const DEPT_ROLES = {
-  "discord moderation high command": "ID_HERE",
-  "discord moderation senior": "ID_HERE",
-  "discord moderation junior": "ID_HERE",
-  "discord moderation agent": "ID_HERE",
-  "support agency high command": "ID_HERE",
-  "support agency senior": "ID_HERE",
-  "support agency junior": "ID_HERE",
-  "support agency": "ID_HERE",
-  "community management high command": "ID_HERE",
-  "community management senior": "ID_HERE",
-  "community management junior": "ID_HERE",
-  "community management": "ID_HERE",
-  "application management": "ID_HERE",
-  "partnership team high command": "ID_HERE",
-  "partnership team": "ID_HERE",
-  "engagement team high command": "ID_HERE",
-  "engagement team senior": "ID_HERE",
-  "engagement team junior": "ID_HERE",
-  "engagement team agent": "ID_HERE",
-  "giveaway host": "ID_HERE",
-  "quota officer": "ID_HERE"
-};
-
 const SPECIAL_ROLES = ["1494922588428697654", "1494921889313984552"];
 
-// ================= RANKS =================
 const ranks = [
   "1494281388092952576", "1494918304211402833", "1494919385654235276",
   "1494919521922846790", "1494919940526964883", "1494920068667146251",
@@ -69,30 +27,48 @@ const ranks = [
   "1494921290061053992"
 ];
 
-// ================= CLIENT =================
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers
-  ]
-});
-
+// ================= COMMAND DEFINITIONS =================
 const commands = [
-  new SlashCommandBuilder().setName("verify").setDescription("Verify yourself").toJSON()
-];
-const rest = TOKEN ? new REST({ version: "10" }).setToken(TOKEN) : null;
+  new SlashCommandBuilder().setName("verify").setDescription("Verify yourself"),
+  new SlashCommandBuilder().setName("points").setDescription("View your staff points"),
+  new SlashCommandBuilder().setName("leaderboard").setDescription("View staff leaderboard"),
+  new SlashCommandBuilder().setName("promote").setDescription("Promote a staff member")
+    .addUserOption(o => o.setName("target").setDescription("User to promote").setRequired(true))
+    .addStringOption(o => o.setName("reason").setDescription("Reason (17+ chars)").setRequired(true))
+    .addUserOption(o => o.setName("approver").setDescription("Approver for +2 jumps").setRequired(false)),
+  new SlashCommandBuilder().setName("demote").setDescription("Demote a staff member")
+    .addUserOption(o => o.setName("target").setDescription("User to demote").setRequired(true))
+    .addStringOption(o => o.setName("reason").setDescription("Reason (17+ chars)").setRequired(true))
+    .addUserOption(o => o.setName("approver").setDescription("Approver for -2 jumps").setRequired(false)),
+  new SlashCommandBuilder().setName("terminate").setDescription("Terminate a staff member")
+    .addUserOption(o => o.setName("target").setDescription("User to fire").setRequired(true))
+    .addStringOption(o => o.setName("reason").setDescription("Reason (17+ chars)").setRequired(true))
+    .addUserOption(o => o.setName("approver").setDescription("Required Mid-Approval").setRequired(true)),
+  new SlashCommandBuilder().setName("revert_termination").setDescription("Restore roles to a fired user")
+    .addUserOption(o => o.setName("target").setDescription("User to restore").setRequired(true))
+    .addStringOption(o => o.setName("reason").setDescription("Reason (15+ chars)").setRequired(true))
+    .addUserOption(o => o.setName("approver").setDescription("Required Approver").setRequired(true)),
+  new SlashCommandBuilder().setName("dept_punish").setDescription("Departmental action")
+    .addUserOption(o => o.setName("target").setDescription("User to punish").setRequired(true))
+    .addStringOption(o => o.setName("role").setDescription("Exact role name").setRequired(true))
+    .addStringOption(o => o.setName("reason").setDescription("Reason").setRequired(true))
+].map(command => command.toJSON());
 
-client.once("ready", async () => {
-  console.log(`Logged in as ${client.user.tag}`);
-  if (rest && TOKEN && CLIENT_ID && GUILD_ID) {
-    if (!CLIENT_ID || !GUILD_ID) {
-  console.log("❌ Missing CLIENT_ID or GUILD_ID");
-  return;
-}
-  } else {
-    console.error("[ERROR] Skipping slash command registration: TOKEN, CLIENT_ID, or GUILD_ID is missing.");
+// ================= CLIENT SETUP =================
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] });
+const rest = new REST({ version: "10" }).setToken(TOKEN);
+
+// FIX: Changed to ClientReady
+client.once(Events.ClientReady, async (c) => {
+  console.log(`✅ Slash Command Bot Online: ${c.user.tag}`);
+  console.log("CLIENT_ID:", CLIENT_ID);
+  console.log("GUILD_ID:", GUILD_ID);
+
+  try {
+    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+    console.log(`✅ Registered ${commands.length} commands.`);
+  } catch (error) {
+    console.error("Failed to register commands:", error);
   }
 });
 
@@ -100,145 +76,118 @@ client.once("ready", async () => {
 const getRank = (member) => ranks.find(r => member.roles.cache.has(r));
 const getRankIndex = (id) => ranks.indexOf(id);
 
-function parseFields(content) {
-  const data = {};
-  content.split("\n").forEach(line => {
-    const [k, ...v] = line.split(":");
-    if (!v.length) return;
-    data[k.trim().toLowerCase()] = v.join(":").trim();
-  });
-  return data;
-}
+// ================= INTERACTION HANDLER =================
+client.on(Events.InteractionCreate, async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
 
-function extractId(text) {
-  if (!text) return null;
-  const match = text.match(/<@!?(\d+)>/);
-  return match ? match[1] : null;
-}
+  const { commandName, options, member, guild, channel } = interaction;
 
-// ================= LOGIC =================
-client.on("guildMemberAdd", async (member) => {
+  // VERIFY
+  if (commandName === "verify") {
+    if (member.roles.cache.has(VERIFIED_ROLE)) return interaction.reply({ content: "Already verified.", ephemeral: true });
+    await member.roles.remove(UNVERIFIED_ROLE).catch(() => {});
+    await member.roles.add(VERIFIED_ROLE).catch(() => {});
+    return interaction.reply({ content: "Verified!", ephemeral: true });
+  }
+
+  // POINTS & LEADERBOARD
+  if (commandName === "points") {
+    const row = db.getPoints(member.id) || { points: 0 };
+    return interaction.reply(`⭐ You have ${row.points} points.`);
+  }
+
+  if (commandName === "leaderboard") {
+    const top = db.getLeaderboard();
+    const text = top.slice(0, 10).map((u, i) => `${i + 1}. <@${u.staffId}> - ${u.points}`).join("\n") || "No data";
+    return interaction.reply({ content: `🏆 **Leaderboard**\n${text}` });
+  }
+
+  // STAFF SYSTEM SECURITY
+  if (channel.id !== LOG_CHANNEL) return interaction.reply({ content: "Commands only allowed in the Log Channel.", ephemeral: true });
+  
+  const isStaff = member.roles.cache.has(SUPPORT) || member.roles.cache.has(MOD);
+  const targetMember = options.getMember("target");
+  const reason = options.getString("reason");
+  const approver = options.getMember("approver");
+
+  if (!targetMember) return interaction.reply({ content: "User not found.", ephemeral: true });
+
+  // DEPT PUNISH
+  if (commandName === "dept_punish") {
+    if (!member.roles.cache.has(DEPT_PUNISH_PERM)) return interaction.reply({ content: "🛡️ Hierarchy Access Denied.", ephemeral: true });
+    const roleInput = options.getString("role").toLowerCase();
+    const deptRole = guild.roles.cache.find(r => r.name.toLowerCase() === `[dept] ${roleInput}` || r.name.toLowerCase() === roleInput);
+    if (!deptRole) return interaction.reply({ content: "❌ Role not found.", ephemeral: true });
+    await targetMember.roles.remove(deptRole).catch(() => {});
+    return interaction.reply(`✅ Successfully removed ${deptRole.name} from ${targetMember.user.tag}`);
+  }
+
+  // CORE STAFF COMMANDS
+  if (!isStaff) return interaction.reply({ content: "Unauthorized.", ephemeral: true });
+  if (targetMember.id === member.id) return interaction.reply({ content: "🚫 You cannot act on yourself.", ephemeral: true });
+
+  const senderRank = getRank(member);
+  if (!senderRank) return interaction.reply({ content: "You do not have a staff rank.", ephemeral: true });
+  const senderIndex = getRankIndex(senderRank);
+
+  // PROMOTION / DEMOTION
+  if (commandName === "promote" || commandName === "demote") {
+    const currentRank = getRank(targetMember);
+    if (!currentRank) return interaction.reply({ content: "Target has no rank.", ephemeral: true });
+    
+    const targetIndex = getRankIndex(currentRank);
+    if (senderIndex <= targetIndex) return interaction.reply({ content: "🛡️ Hierarchy Lock: Target is peer/superior.", ephemeral: true });
+    if (reason.length < 17) return interaction.reply({ content: "📝 Reason too short (17+ chars).", ephemeral: true });
+
+    const isMulti = !!approver;
+    if (isMulti && approver.id === member.id) return interaction.reply({ content: "❌ Cannot self-approve multi-jumps.", ephemeral: true });
+
+    let newIndex = commandName === "promote" ? (isMulti ? targetIndex + 2 : targetIndex + 1) : (isMulti ? targetIndex - 2 : targetIndex - 1);
+    if (newIndex < 0 || newIndex >= ranks.length) return interaction.reply({ content: "❌ Target is at rank limit.", ephemeral: true });
+
+    if (isMulti) {
+      if (!(approver.roles.cache.has(HIGH_APPROVAL) || approver.roles.cache.has(MID_APPROVAL))) return interaction.reply({ content: "❌ Invalid Approver.", ephemeral: true });
+    }
+
+    await targetMember.roles.add(ranks[newIndex]);
+    await targetMember.roles.remove(currentRank).catch(() => {});
+    if (newIndex >= 6) for (const r of SPECIAL_ROLES) await targetMember.roles.add(r).catch(() => {});
+    
+    return interaction.reply(`✅ ${commandName === "promote" ? "Promoted" : "Demoted"} ${targetMember.user.tag} to <@&${ranks[newIndex]}>`);
+  }
+
+  // TERMINATE
+  if (commandName === "terminate") {
+    if (reason.length < 17) return interaction.reply({ content: "📝 Reason too short.", ephemeral: true });
+    if (approver.id === member.id || !approver.roles.cache.has(MID_APPROVAL)) return interaction.reply({ content: "❌ Valid Approver Required.", ephemeral: true });
+    
+    const currentRank = getRank(targetMember);
+    if (currentRank && senderIndex <= getRankIndex(currentRank)) return interaction.reply({ content: "🛡️ Hierarchy Lock.", ephemeral: true });
+
+    const rolesToSave = targetMember.roles.cache.filter(r => ranks.includes(r.id)).map(r => r.id);
+    db.saveTermination(targetMember.id, rolesToSave);
+    await targetMember.roles.remove(rolesToSave);
+    return interaction.reply(`✅ Terminated ${targetMember.user.tag}. Roles saved.`);
+  }
+
+  // REVERT
+  if (commandName === "revert_termination") {
+    if (reason.length < 15) return interaction.reply({ content: "📝 Reason too short.", ephemeral: true });
+    if (approver.id === member.id) return interaction.reply({ content: "❌ Valid Approver Required.", ephemeral: true });
+    
+    const saved = db.getTermination(targetMember.id);
+    if (!saved) return interaction.reply({ content: "❌ No saved data found.", ephemeral: true });
+    
+    for (const r of saved.roles) await targetMember.roles.add(r).catch(() => {});
+    db.deleteTermination(targetMember.id);
+    return interaction.reply(`✅ Restored roles for ${targetMember.user.tag}.`);
+  }
+});
+
+// Join Event
+client.on(Events.GuildMemberAdd, async (member) => {
   const role = member.guild.roles.cache.get(UNVERIFIED_ROLE);
   if (role) await member.roles.add(role).catch(() => {});
-});
-
-client.on("interactionCreate", async (i) => {
-  if (!i.isChatInputCommand() || i.commandName !== "verify") return;
-  if (i.member.roles.cache.has(VERIFIED_ROLE)) return i.reply({ content: "Already verified.", ephemeral: true });
-  const unverified = i.guild.roles.cache.get(UNVERIFIED_ROLE);
-  if (unverified) await i.member.roles.remove(unverified).catch(() => {});
-  await i.member.roles.add(VERIFIED_ROLE).catch(() => {});
-  return i.reply({ content: "Verified!", ephemeral: true });
-});
-
-client.on("messageCreate", async (message) => {
-  if (message.author.bot || !message.guild) return;
-
-  if (message.content.startsWith("!")) {
-    const cmd = message.content.split(" ")[0].toLowerCase();
-    if (cmd === "!points") {
-      const row = (await db.getPoints(message.author.id)) || { points: 0 };
-      return message.reply(`⭐ ${row.points} points`);
-    }
-    if (cmd === "!leaderboard") {
-      const top = await db.getLeaderboard();
-      return message.reply(top.slice(0, 10).map((u, i) => `${i + 1}. <@${u.staffId}> - ${u.points}`).join("\n") || "No data");
-    }
-    return;
-  }
-
-  if (message.channel.id !== LOG_CHANNEL) return;
-
-  const data = parseFields(message.content);
-  const type = message.content.split("\n")[0].toLowerCase().trim();
-
-  try {
-    // ================= DEPARTMENT PUNISH =================
-    if (type === "department_punish" || type === "dept_punish") {
-      if (!message.member.roles.cache.has(DEPT_PUNISH_PERM)) return message.react("🛡️");
-
-      const targetId = extractId(data["their username"]);
-      const roleName = data["role"]?.toLowerCase();
-      const action = data["action"]?.toLowerCase();
-
-      if (!targetId || !roleName || !action || !data["reason"]) return message.react("❓");
-
-      const target = await message.guild.members.fetch(targetId).catch(() => null);
-      const roleId = DEPT_ROLES[roleName];
-
-      if (!target || !roleId) return message.react("❌");
-
-      // Removes role for both suspension and ban as requested
-      await target.roles.remove(roleId).catch(() => {});
-      return message.react("✅");
-    }
-
-    // ================= STAFF SYSTEM =================
-    const isStaff = message.member.roles.cache.has(SUPPORT) || message.member.roles.cache.has(MOD);
-    if (!isStaff) return;
-
-    if (!data["their username"] || !data["reason"]) return message.react("❓");
-    const targetId = extractId(data["their username"]);
-    if (!targetId || targetId === message.author.id) return message.react("🚫");
-    const target = await message.guild.members.fetch(targetId).catch(() => null);
-    if (!target) return message.react("❌");
-
-    const reason = data["reason"];
-    const approverId = extractId(data["approved by"]);
-    const senderRank = getRank(message.member);
-    if (!senderRank) return message.react("❌");
-    const senderIndex = getRankIndex(senderRank);
-
-    if (type === "promotion" || type === "demotion") {
-      const currentRank = getRank(target);
-      if (!currentRank) return message.react("❌");
-      const targetIndex = getRankIndex(currentRank);
-      if (senderIndex <= targetIndex) return message.react("🛡️");
-      if (reason.length < 17) return message.react("📝");
-      if (approverId === message.author.id) return message.react("❌");
-
-      const isMulti = !!approverId;
-      let newIndex = type === "promotion" ? (isMulti ? targetIndex + 2 : targetIndex + 1) : (isMulti ? targetIndex - 2 : targetIndex - 1);
-      if (newIndex < 0 || newIndex >= ranks.length) return message.react("❌");
-
-      if (isMulti) {
-        const approver = await message.guild.members.fetch(approverId).catch(() => null);
-        if (!approver || !(approver.roles.cache.has(HIGH_APPROVAL) || approver.roles.cache.has(MID_APPROVAL))) return message.react("❌");
-      }
-
-      await target.roles.add(ranks[newIndex]);
-      await target.roles.remove(currentRank).catch(() => {});
-      if (newIndex >= 6) for (const r of SPECIAL_ROLES) await target.roles.add(r).catch(() => {});
-      return message.react("✅");
-    }
-
-    if (type === "termination") {
-      if (reason.length < 17 || !approverId || approverId === message.author.id) return message.react("❌");
-      const currentRank = getRank(target);
-      if (currentRank && senderIndex <= getRankIndex(currentRank)) return message.react("🛡️");
-      const approver = await message.guild.members.fetch(approverId).catch(() => null);
-      if (!approver || !approver.roles.cache.has(MID_APPROVAL)) return message.react("❌");
-
-      const rolesToSave = target.roles.cache.filter(r => ranks.includes(r.id)).map(r => r.id);
-      await db.saveTermination(target.id, rolesToSave);
-      await target.roles.remove(rolesToSave);
-      return message.react("✅");
-    }
-
-    if (type === "termination-revert") {
-      if (reason.length < 15 || !approverId || approverId === message.author.id) return message.react("❌");
-      const saved = await db.getTermination(target.id);
-      if (!saved) return message.react("❌");
-      for (const r of saved.roles) await target.roles.add(r).catch(() => {});
-      await db.deleteTermination(target.id);
-      return message.react("✅");
-    }
-
-    return message.react("❓");
-  } catch (err) {
-    console.error(err);
-    return message.react("⚠️");
-  }
 });
 
 client.login(TOKEN);
