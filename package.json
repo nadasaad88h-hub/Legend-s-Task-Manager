@@ -1,7 +1,7 @@
 {
-  "name": "lagging-legends-bot",
+  "name": "lagging-legends-admin",
   "version": "1.0.0",
-  "description": "Staff management system for Lagging Legends",
+  "description": "Staff promotion and administration system",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -10,7 +10,6 @@
     "discord.js": "^14.14.1",
     "@discordjs/rest": "^2.2.0",
     "discord-api-types": "^0.37.67",
-    "sqlite3": "^5.1.7",
     "dotenv": "^16.4.5"
   },
   "engines": {
