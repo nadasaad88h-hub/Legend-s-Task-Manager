@@ -45,10 +45,10 @@ const commands = [
 const rest = new REST({ version: "10" }).setToken(TOKEN);
 
 client.once(Events.ClientReady, async () => {
-  console.log("✅ Promotion Engine Ready.");
+  console.log("✅ Promotion Engine Live | Lagging Legends");
   try {
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-  } catch (e) { console.error(e); }
+  } catch (e) { console.error("Command Sync Error:", e); }
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -57,7 +57,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   const { commandName, options, channelId, member, guild, user } = interaction;
 
   if (commandName === "promote") {
-    // 1. Channel Restriction
+    // 1. Channel Security
     if (channelId !== STAFF_ADMIN_CHANNEL) {
       return interaction.reply({ content: "⚠️ You cannot use this command in this channel!", ephemeral: true });
     }
@@ -67,15 +67,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const reason = options.getString("reason");
     const approvedInput = options.getString("approved_by");
 
-    if (!targetMember) return interaction.reply({ content: "⚠️ Could not find that user.", ephemeral: true });
-
-    // 2. Self-Promote Check
+    if (!targetMember) return interaction.reply({ content: "⚠️ User not found in server.", ephemeral: true });
+    
+    // 2. Anti-Self Promotion
     if (targetMember.id === user.id) {
       return interaction.reply({ content: "⚠️ You CANNOT promote yourself!", ephemeral: true });
     }
 
     const isHighStaff = member.roles.cache.has(HIGH_STAFF_ROLE);
-    let approverMention = "";
+    let approverMention = null;
 
     // 3. Approval Logic
     if (!isHighStaff && moveAmount > 1) {
@@ -86,13 +86,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       
       const approver = await guild.members.fetch(match[1]).catch(() => null);
       if (!approver || !approver.roles.cache.has(HIGH_STAFF_ROLE)) {
-        return interaction.reply({ content: "⚠️ The approver must be a user with the High Staff role!", ephemeral: true });
+        return interaction.reply({ content: "⚠️ The approver must have the High Staff role!", ephemeral: true });
       }
       approverMention = `<@${approver.id}>`;
     }
 
-    // 4. Rank Calculation
-    // We find the highest rank from our list that the user currently has
+    // 4. Find & Verify Current Rank
     const currentRankIndex = rankHierarchy.findIndex(id => targetMember.roles.cache.has(id));
     
     if (currentRankIndex === -1) {
@@ -102,29 +101,29 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const newRankIndex = currentRankIndex + moveAmount;
 
     if (newRankIndex >= rankHierarchy.length) {
-      return interaction.reply({ content: "⚠️ This user is already at the max rank or the move is too large.", ephemeral: true });
+      return interaction.reply({ content: "⚠️ Promotion exceeds the maximum rank available.", ephemeral: true });
     }
 
-    // 5. Action
+    // 5. Apply Changes
     try {
       await targetMember.roles.remove(rankHierarchy[currentRankIndex]);
       await targetMember.roles.add(rankHierarchy[newRankIndex]);
 
-      // 6. Final Message Construction
-      let output = "";
-      if (isHighStaff || moveAmount === 1) {
-        // Normal Format (High staff doesn't need to show approval, Normal Promo doesn't show it)
-        output = `<@${targetMember.id}> Has been promoted by ${user.username}!\nReason: ${reason}`;
+      // 6. Format the Exact Output
+      // Using \n for proper spacing as requested
+      let output = `## *<@${targetMember.id}> Has been promoted by ${user.username}. Congratulations! 🎉\nReason: ${reason}`;
+      
+      if (approverMention) {
+        output += `\nApproved by: ${approverMention}*`;
       } else {
-        // Multi-Rank Promo by non-high staff
-        output = `<@${targetMember.id}> Has been promoted by ${user.username} with an approval from ${approverMention}\nReason: ${reason}`;
+        output += `*`;
       }
 
       return interaction.reply({ content: output, ephemeral: false });
 
     } catch (err) {
-      console.error(err);
-      return interaction.reply({ content: "⚠️ Error updating roles. Is the bot rank high enough?", ephemeral: true });
+      console.error("Role Update Error:", err);
+      return interaction.reply({ content: "⚠️ Bot cannot manage roles. Check role hierarchy!", ephemeral: true });
     }
   }
 });
