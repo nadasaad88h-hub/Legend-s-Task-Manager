@@ -2,197 +2,130 @@
 
 const { Client, GatewayIntentBits, SlashCommandBuilder, Routes, Events } = require("discord.js");
 const { REST } = require("@discordjs/rest");
-const db = require("./db");
-
-process.on("unhandledRejection", (err) => {
-  console.error("🛑 Unhandled Promise Rejection:", err);
-});
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 
-const SUPPORT = "1494277529614159893";
-const MOD = "1494276990700753018";
-const DEPT_PUNISH_PERM = "1494275524766208081";
-const UNVERIFIED_ROLE = "1494279535108292709";
-const VERIFIED_ROLE = "1494279460373926030";
+const STAFF_ADMIN_CHANNEL = "1494273679951925248";
+const HIGH_STAFF_ROLE = "1494278992402972733";
+
+const rankHierarchy = [
+  "1494281388092952576", 
+  "1494918304211402833", 
+  "1494919385654235276",
+  "1494919521922846790",
+  "1494919940526964883",
+  "1494920068667146251",
+  "1494920425346433045",
+  "1494920607366647979",
+  "1494920909130301490", 
+  "1494921290061053992"  
+];
 
 const client = new Client({ 
-  intents: [
-    GatewayIntentBits.Guilds, 
-    GatewayIntentBits.GuildMembers, 
-    GatewayIntentBits.GuildMessages, 
-    GatewayIntentBits.MessageContent
-  ] 
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] 
 });
 
-// ================= DM TEXT SYSTEM =================
-function getPunishDM(user, type, reason, evidence, staff) {
-  const mention = `<@${user.id}>`;
-
-  if (type === "Verbal Warning") {
-    return `# LAGGING LEGENDS_COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT
-
-⸻
-
-## 🟡 VERBAL WARNING
-Dear ${mention},
-
-This is an official notice that you have received a **verbal warning** from the **Server Administration.**
-
-**Reason:**
-${reason}`;
-  }
-
-  return `# LAGGING LEGENDS_COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT
-
-⸻
-
-## 🔴 ${type.toUpperCase()}
-Greetings, ${mention}.
-
-This is an official notice regarding a disciplinary action taken against your staff position in **Lagging Legends**.
-
-**Type:** ${type}
-**Reason:** ${reason}
-**Evidence:** ${evidence}
-**Issued By:** ${staff}
-
-*Lagging Legends Administration*`;
-}
-
-// ================= COMMANDS =================
 const commands = [
-  new SlashCommandBuilder().setName("verify").setDescription("Verify yourself"),
-  new SlashCommandBuilder().setName("points").setDescription("View your staff points"),
-  new SlashCommandBuilder().setName("leaderboard").setDescription("View staff leaderboard"),
-  new SlashCommandBuilder().setName("statistics").setDescription("View your detailed staff stats"),
-  new SlashCommandBuilder().setName("check_quota").setDescription("Check your current quota status"),
-  new SlashCommandBuilder().setName("quota_excuse").setDescription("Submit a quota excuse")
-    .addStringOption(o => o.setName("reason").setDescription("Reason for excuse").setRequired(true))
-    .addStringOption(o => o.setName("duration").setDescription("Duration").setRequired(true)),
-  new SlashCommandBuilder().setName("punish").setDescription("Issue a punishment")
-    .addUserOption(o => o.setName("target").setDescription("User").setRequired(true))
-    .addStringOption(o => o.setName("type").setDescription("Type").setRequired(true)
+  new SlashCommandBuilder()
+    .setName("promote")
+    .setDescription("Promote a staff member")
+    .addUserOption(o => o.setName("target").setDescription("User to promote").setRequired(true))
+    .addStringOption(o => o.setName("type").setDescription("Promotion Type").setRequired(true)
         .addChoices(
-            { name: 'Verbal Warning', value: 'Verbal Warning' },
-            { name: 'Staff Warning', value: 'Staff Warning' },
-            { name: 'Strike', value: 'Strike' },
-            { name: 'Suspension', value: 'Suspension' },
-            { name: 'Termination', value: 'Termination' }
+            { name: 'Normal Promotion', value: '1' },
+            { name: 'Move by 2 ranks', value: '2' },
+            { name: 'Move by 3 ranks', value: '3' }
         ))
     .addStringOption(o => o.setName("reason").setDescription("Reason").setRequired(true))
-    .addStringOption(o => o.setName("evidence").setDescription("Evidence (Links/Proof)")),
-  new SlashCommandBuilder().setName("dept_punish").setDescription("Departmental action")
-    .addUserOption(o => o.setName("target").setDescription("User").setRequired(true))
-    .addStringOption(o => o.setName("role").setDescription("Role name").setRequired(true))
-].map(command => command.toJSON());
+    .addStringOption(o => o.setName("approved_by").setDescription("N/A or @Mention").setRequired(true))
+].map(c => c.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(TOKEN);
 
-client.once(Events.ClientReady, async (c) => {
-  console.log(`✅ Lagging Legends Bot Online: ${c.user.tag}`);
+client.once(Events.ClientReady, async () => {
+  console.log("✅ Promotion Engine Ready.");
   try {
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-  } catch (e) { console.error("Registration Error:", e); }
+  } catch (e) { console.error(e); }
 });
 
-// ================= INTERACTIONS =================
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-  const { commandName, options, member, user, guild } = interaction;
 
-  // ALL REPLIES PRIVATE
-  await interaction.deferReply({ ephemeral: true });
+  const { commandName, options, channelId, member, guild, user } = interaction;
 
-  const isStaff = member.roles.cache.has(SUPPORT) || member.roles.cache.has(MOD);
-
-  try {
-    if (commandName === "verify") {
-      await member.roles.remove(UNVERIFIED_ROLE).catch(() => {});
-      await member.roles.add(VERIFIED_ROLE).catch(() => {});
-      return interaction.editReply("Verified!");
+  if (commandName === "promote") {
+    // 1. Channel Restriction
+    if (channelId !== STAFF_ADMIN_CHANNEL) {
+      return interaction.reply({ content: "⚠️ You cannot use this command in this channel!", ephemeral: true });
     }
 
-    if (commandName === "points") {
-      const row = db.getPoints(user.id);
-      return interaction.editReply(`⭐ You have **${row?.points ?? 0}** points.`);
+    const targetMember = options.getMember("target");
+    const moveAmount = parseInt(options.getString("type"));
+    const reason = options.getString("reason");
+    const approvedInput = options.getString("approved_by");
+
+    if (!targetMember) return interaction.reply({ content: "⚠️ Could not find that user.", ephemeral: true });
+
+    // 2. Self-Promote Check
+    if (targetMember.id === user.id) {
+      return interaction.reply({ content: "⚠️ You CANNOT promote yourself!", ephemeral: true });
     }
 
-    if (commandName === "leaderboard") {
-      let top = db.getLeaderboard() || [];
-      const userRow = db.getPoints(user.id);
-      const userPoints = userRow?.points ?? 0;
+    const isHighStaff = member.roles.cache.has(HIGH_STAFF_ROLE);
+    let approverMention = "";
 
-      // Handle empty leaderboard safely
-      if (top.length === 0) {
-        return interaction.editReply(`🏆 **Points Leaderboard!**\n\nNo data yet.\n\n**You:** <@${user.id}> (${userPoints} Points)`);
+    // 3. Approval Logic
+    if (!isHighStaff && moveAmount > 1) {
+      const match = approvedInput.match(/<@!?(\d+)>/);
+      if (!match) {
+        return interaction.reply({ content: "⚠️ This promotion type requires a valid @Mention in the Approved By section!", ephemeral: true });
+      }
+      
+      const approver = await guild.members.fetch(match[1]).catch(() => null);
+      if (!approver || !approver.roles.cache.has(HIGH_STAFF_ROLE)) {
+        return interaction.reply({ content: "⚠️ The approver must be a user with the High Staff role!", ephemeral: true });
+      }
+      approverMention = `<@${approver.id}>`;
+    }
+
+    // 4. Rank Calculation
+    // We find the highest rank from our list that the user currently has
+    const currentRankIndex = rankHierarchy.findIndex(id => targetMember.roles.cache.has(id));
+    
+    if (currentRankIndex === -1) {
+      return interaction.reply({ content: "⚠️ This user does not have a recognized staff rank role.", ephemeral: true });
+    }
+
+    const newRankIndex = currentRankIndex + moveAmount;
+
+    if (newRankIndex >= rankHierarchy.length) {
+      return interaction.reply({ content: "⚠️ This user is already at the max rank or the move is too large.", ephemeral: true });
+    }
+
+    // 5. Action
+    try {
+      await targetMember.roles.remove(rankHierarchy[currentRankIndex]);
+      await targetMember.roles.add(rankHierarchy[newRankIndex]);
+
+      // 6. Final Message Construction
+      let output = "";
+      if (isHighStaff || moveAmount === 1) {
+        // Normal Format (High staff doesn't need to show approval, Normal Promo doesn't show it)
+        output = `<@${targetMember.id}> Has been promoted by ${user.username}!\nReason: ${reason}`;
+      } else {
+        // Multi-Rank Promo by non-high staff
+        output = `<@${targetMember.id}> Has been promoted by ${user.username} with an approval from ${approverMention}\nReason: ${reason}`;
       }
 
-      const displayCount = Math.min(top.length, 10);
-      let list = top.slice(0, displayCount)
-        .map((u, i) => `${i + 1}. <@${u.staffId}> (${u.points} Points)`)
-        .join("\n");
+      return interaction.reply({ content: output, ephemeral: false });
 
-      return interaction.editReply(`🏆 **Points Leaderboard!**\n\n${list}\n\n**You:** <@${user.id}> (${userPoints} Points)`);
+    } catch (err) {
+      console.error(err);
+      return interaction.reply({ content: "⚠️ Error updating roles. Is the bot rank high enough?", ephemeral: true });
     }
-
-    if (commandName === "punish") {
-        if (!isStaff) return interaction.editReply("❌ No permission");
-        const targetMember = options.getMember("target");
-        const type = options.getString("type");
-        const reason = options.getString("reason");
-        const evidence = options.getString("evidence") || "None";
-
-        if (!targetMember) return interaction.editReply("❌ User not found.");
-
-        const punishPoints = { "Verbal Warning": 1, "Staff Warning": 2, "Strike": 3 };
-        if (punishPoints[type]) db.addPoints(targetMember.id, punishPoints[type]);
-
-        const dm = getPunishDM(targetMember.user, type, reason, evidence, user.tag);
-        await targetMember.send(dm).catch(() => console.log(`DM Failed for ${targetMember.user.tag}`));
-
-        return interaction.editReply(`✅ Punished **${targetMember.user.tag}** with **${type}**`);
-    }
-
-    if (commandName === "statistics") {
-        const stats = db.getPoints(user.id);
-        return interaction.editReply(`📊 **Staff Statistics**\nTotal Points: **${stats?.points ?? 0}**`);
-    }
-
-    if (commandName === "check_quota") {
-        return interaction.editReply("📅 **Quota Status**: 0/5 logs completed this week.");
-    }
-
-    if (commandName === "quota_excuse") {
-        return interaction.editReply("✅ **Excuse Submitted** to Server Administration.");
-    }
-
-    if (commandName === "dept_punish") {
-      if (!member.roles.cache.has(DEPT_PUNISH_PERM)) return interaction.editReply("🛡️ Access Denied.");
-      const targetMember = options.getMember("target");
-      const roleInput = options.getString("role").toLowerCase();
-      
-      const deptRole = guild.roles.cache.find(r => 
-        r.name.toLowerCase() === roleInput || 
-        r.name.toLowerCase() === `[dept] ${roleInput}`
-      );
-
-      if (!targetMember || !deptRole) return interaction.editReply("❌ Role/Target not found.");
-      
-      // Hierarchy Check
-      if (deptRole.position >= guild.members.me.roles.highest.position) {
-          return interaction.editReply("❌ I cannot remove this role (Role is higher than mine).");
-      }
-
-      await targetMember.roles.remove(deptRole).catch(() => {});
-      return interaction.editReply(`✅ Removed **${deptRole.name}**.`);
-    }
-
-  } catch (err) {
-    console.error("Interaction Error:", err);
-    if (interaction.deferred) await interaction.editReply("⚠️ Error processing command.");
   }
 });
 
