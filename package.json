@@ -1,7 +1,7 @@
 {
   "name": "lagging-legends-admin",
   "version": "1.0.0",
-  "description": "Staff promotion and administration system",
+  "description": "Professional Promotion & Cooldown System",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -10,6 +10,7 @@
     "discord.js": "^14.14.1",
     "@discordjs/rest": "^2.2.0",
     "discord-api-types": "^0.37.67",
+    "better-sqlite3": "^9.4.3",
     "dotenv": "^16.4.5"
   },
   "engines": {
