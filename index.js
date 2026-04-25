@@ -12,16 +12,13 @@ const { DISCORD_TOKEN, CLIENT_ID, GUILD_ID } = process.env;
 
 // ================= [ CONFIGURATION ] =================
 const GUESS_CHANNEL_ID = "1497453944702500864";
-const GAMES_CHANNEL_ID = "1497454650880950322";
 const VERIFY_CHANNEL_ID = "1494235821899907153";
 const MODLOGS_CHANNEL = "1494273679951925248";
 const STAFF_ADMIN_CHANNEL = "1494273679951925248";
 
 const VERIFIED_ROLE_ID = "1494237255148371998";
 const VERIFY_ADMIN_ROLE = "1494274846912417812";
-const HIGH_STAFF_ROLE = "1494278992402972733";
 const PUNISH_ACCESS_ROLES = ["1494276990700753018", "1494277529614159893", "1494284826747076619"];
-const BYPASS_SELF_ROLE = "1494274846912417812";
 
 const MILESTONE_ROLE_1 = "1494921889313984552";
 const MILESTONE_ROLE_2 = "1494922588428697654";
@@ -63,25 +60,22 @@ let hintMsgId = null;
 let skipCooldowns = new Map();
 
 async function startNextRound(channel) {
-    if (!channel) return console.log("❌ Error: Channel not found for startNextRound.");
+    if (!channel) return;
     engineStatus = "LOCKED";
-    
     const data = placeDatabase[Math.floor(Math.random() * placeDatabase.length)];
     currentCountry = data.name;
     hintUsed = false;
 
-    // Clean up old messages
     try {
         if (hintMsgId) {
             const hMsg = await channel.messages.fetch(hintMsgId).catch(() => null);
             if (hMsg?.deletable) await hMsg.delete().catch(() => {});
-            hintMsgId = null;
         }
         if (lastGameMsgId) {
             const old = await channel.messages.fetch(lastGameMsgId).catch(() => null);
             if (old?.deletable) await old.delete().catch(() => {});
         }
-    } catch (err) { console.log("Cleanup Error: " + err); }
+    } catch (e) {}
 
     const embed = new EmbedBuilder()
         .setTitle("🌍 Guess the Place!")
@@ -104,86 +98,70 @@ client.on(Events.InteractionCreate, async (itx) => {
     const { commandName, options, member, user, guild, customId } = itx;
 
     if (itx.isButton()) {
-        // --- VERIFY BUTTON ---
         if (customId === "verify_btn") {
             if (member.roles.cache.has(VERIFIED_ROLE_ID)) return itx.reply({ content: "ℹ️ You are already verified!", ephemeral: true });
-            const ageMs = Date.now() - user.createdTimestamp;
-            const ageDays = Math.floor(ageMs / (1000 * 60 * 60 * 24));
-            
+            const ageDays = Math.floor((Date.now() - user.createdTimestamp) / (1000 * 60 * 60 * 24));
             await member.roles.add(VERIFIED_ROLE_ID);
             await itx.reply({ content: "✅ You have been successfully verified, go to 🧻 | roles to unlock more features!", ephemeral: true });
-            
-            let ageWarning = "";
-            if (ageDays < 30) ageWarning = `\n⚠️ **ACCOUNT CREATED ${ageDays} DAYS AGO!** ⚠️`;
+            let ageWarning = ageDays < 30 ? `\n⚠️ **ACCOUNT CREATED ${ageDays} DAYS AGO!** ⚠️` : "";
             guild.channels.cache.get(MODLOGS_CHANNEL)?.send(`<@${user.id}> has verified in the server.${ageWarning}`);
             return;
         }
 
-        // --- HINT BUTTON ---
         if (customId === "reveal_letter" && engineStatus === "ACTIVE") {
             if (hintUsed) return itx.deferUpdate();
             hintUsed = true;
-            
             const hMsg = await itx.channel.send(`## *${user.username} revealed the first letter!*\n**${currentCountry[0].toUpperCase()}**`);
             hintMsgId = hMsg.id;
-
             const newEmbed = EmbedBuilder.from(itx.message.embeds[0]).setDescription("Win **1 Point** by being the first to guess correctly!");
-            await itx.update({ 
-                embeds: [newEmbed], 
-                components: [new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId("hint_done").setLabel("Hint Given").setStyle(ButtonStyle.Secondary).setDisabled(true),
-                    new ButtonBuilder().setCustomId("skip_flag").setLabel("Skip flag").setStyle(ButtonStyle.Danger)
-                )]
-            });
+            await itx.update({ embeds: [newEmbed], components: [new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId("hint_done").setLabel("Hint Given").setStyle(ButtonStyle.Secondary).setDisabled(true),
+                new ButtonBuilder().setCustomId("skip_flag").setLabel("Skip flag").setStyle(ButtonStyle.Danger)
+            )]});
             return;
         }
 
-        // --- SKIP BUTTON ---
         if (customId === "skip_flag" && engineStatus === "ACTIVE") {
             const now = Date.now();
-            const userSkips = skipCooldowns.get(user.id) || [];
-            const validSkips = userSkips.filter(time => now - time < 3600000);
-            if (validSkips.length >= 3) return itx.reply({ content: "⚠️ You have reached your skip limit (3 per hour)!", ephemeral: true });
+            const validSkips = (skipCooldowns.get(user.id) || []).filter(t => now - t < 3600000);
+            if (validSkips.length >= 3) return itx.reply({ content: "⚠️ Limit: 3 skips per hour!", ephemeral: true });
             validSkips.push(now);
             skipCooldowns.set(user.id, validSkips);
-            await itx.reply({ content: `<@${user.id}> has skipped the last place, it was **${currentCountry}**.` });
+            await itx.reply({ content: `<@${user.id}> skipped. It was **${currentCountry}**.` });
             return startNextRound(itx.channel);
         }
     }
 
     if (!itx.isChatInputCommand()) return;
 
-    // --- PUNISH REVERT ---
+    // --- POINTS COMMANDS ---
+    if (commandName === "check_points") {
+        const target = options.getUser("user") || user;
+        const points = db.getPoints(target.id);
+        return itx.reply({ content: `💰 **${target.username}** currently has **${points} points**.` });
+    }
+    if (commandName === "daily") {
+        const reward = db.claimDaily(user.id);
+        if (!reward) return itx.reply({ content: "⏳ You already claimed your daily points today!", ephemeral: true });
+        return itx.reply({ content: `✅ You claimed **${reward} points**! Come back tomorrow.` });
+    }
+    if (commandName === "work_points") {
+        db.addPoints(user.id, 5);
+        return itx.reply({ content: "🛠️ Work recorded. **5 points** added to your balance." });
+    }
+
+    // --- PUNISH COMMANDS ---
     if (commandName === "punish_revert") {
-        if (!member.roles.cache.has(VERIFY_ADMIN_ROLE)) return itx.reply({ content: "❌ Unauthorized. This command is restricted to LL Leadership.", ephemeral: true });
+        if (!member.roles.cache.has(VERIFY_ADMIN_ROLE)) return itx.reply({ content: "❌ Leadership only.", ephemeral: true });
         db.removePunishment(options.getString("case_id"));
-        return itx.reply({ content: `✅ Case ${options.getString("case_id")} has been reverted.`, ephemeral: true });
+        return itx.reply({ content: `✅ Case ${options.getString("case_id")} reverted.`, ephemeral: true });
     }
 
-    // --- PROMOTION ---
-    if (commandName === "promote") {
-        if (itx.channelId !== STAFF_ADMIN_CHANNEL) return itx.reply({ content: "⚠️ Wrong channel.", ephemeral: true });
-        const targetMember = options.getMember("target");
-        const moveAmount = parseInt(options.getString("type"));
-        const approvedInput = options.getString("approved_by");
-
-        const hierarchyIds = rankHierarchy.map(r => r.id);
-        const targetRankIndex = hierarchyIds.findIndex(id => targetMember.roles.cache.has(id));
-        const newRankIndex = targetRankIndex + moveAmount;
-
-        if (targetRankIndex !== 0) await targetMember.roles.remove(hierarchyIds[targetRankIndex]);
-        await targetMember.roles.add(hierarchyIds[newRankIndex]);
-
-        if (newRankIndex >= MILESTONE_RANK_INDEX) await targetMember.roles.add([MILESTONE_ROLE_1, MILESTONE_ROLE_2]);
-
-        let output = `## *<@${targetMember.id}> Has been promoted by ${user.username}. Congratulations! 🎉*\n**Reason: ${options.getString("reason")}**`;
-        if (approvedInput !== "N/A") output += `\n**Approved by: ${approvedInput}**`;
-        return itx.reply({ content: output });
-    }
-
-    // --- PUNISH SYSTEM ---
     if (commandName === "timeout" || commandName === "punish") {
         if (!PUNISH_ACCESS_ROLES.some(id => member.roles.cache.has(id))) return itx.reply({ content: "❌ Unauthorized.", ephemeral: true });
+        
+        await itx.deferReply();
+
         const target = options.getUser("target");
         const targetMember = options.getMember("target");
         const reason = options.getString("reason");
@@ -203,53 +181,63 @@ client.on(Events.InteractionCreate, async (itx) => {
 
         const caseId = db.addPunishment(target.id, type, reason, evidence, user.id);
         await target.send(templates[type]).catch(() => {});
-        
         if (type === "Mute") await targetMember.timeout(ms(durationStr), reason);
         if (type === "Kick") await targetMember.kick(reason);
         if (type === "Ban") await guild.members.ban(target.id, { reason });
 
-        const logEmbed = new EmbedBuilder()
-            .setTitle(`${type} // Case ${caseId}`)
-            .setDescription(`**Target:** <@${target.id}>\n**Issuer:** <@${user.id}>\n**Reason:** ${reason}\n**Evidence:** ${evidence}`)
-            .setColor(0xFF0000).setTimestamp();
+        const log = new EmbedBuilder().setTitle(`${type} // Case ${caseId}`).setDescription(`**Target:** <@${target.id}>\n**Reason:** ${reason}`).setColor(0xFF0000);
+        guild.channels.cache.get(MODLOGS_CHANNEL).send({ embeds: [log] });
+        return itx.editReply({ content: `✅ Issued **${type} // Case ${caseId}**.` });
+    }
 
-        guild.channels.cache.get(MODLOGS_CHANNEL).send({ embeds: [logEmbed] });
-        return itx.reply({ content: `✅ Issued **${type} // Case ${caseId}**.` });
+    // --- PROMOTION COMMAND ---
+    if (commandName === "promote") {
+        if (itx.channelId !== STAFF_ADMIN_CHANNEL) return itx.reply({ content: "⚠️ Wrong channel.", ephemeral: true });
+        const targetMember = options.getMember("target");
+        const moveAmount = parseInt(options.getString("type"));
+        const hierarchyIds = rankHierarchy.map(r => r.id);
+        
+        let targetRankIndex = hierarchyIds.findIndex(id => targetMember.roles.cache.has(id));
+        if (targetRankIndex === -1) targetRankIndex = 0; 
+        const newRankIndex = targetRankIndex + moveAmount;
+
+        if (targetRankIndex !== 0) await targetMember.roles.remove(hierarchyIds[targetRankIndex]);
+        await targetMember.roles.add(hierarchyIds[newRankIndex]);
+        if (newRankIndex >= MILESTONE_RANK_INDEX) await targetMember.roles.add([MILESTONE_ROLE_1, MILESTONE_ROLE_2]);
+
+        return itx.reply({ content: `## *<@${targetMember.id}> Promoted by ${user.username}. 🎉*\n**Reason: ${options.getString("reason")}**` });
+    }
+
+    // --- VERIFY PANEL COMMAND ---
+    if (commandName === "verify_panel") {
+        if (!member.permissions.has("Administrator")) return itx.reply({ content: "❌ Admin only.", ephemeral: true });
+        const embed = new EmbedBuilder().setTitle("🛡️ LL Verification").setDescription("Click below to verify.").setColor(0x00FF00);
+        const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("verify_btn").setLabel("Verify").setStyle(ButtonStyle.Success));
+        return itx.reply({ embeds: [embed], components: [row] });
     }
 });
 
-// ================= [ MESSAGE GUESSING ENGINE ] =================
+// --- GUESSING LOGIC ---
 client.on(Events.MessageCreate, async (msg) => {
     if (msg.channel.id !== GUESS_CHANNEL_ID || msg.author.bot || engineStatus !== "ACTIVE") return;
     if (msg.content.toLowerCase().trim() === currentCountry.toLowerCase().trim()) {
         engineStatus = "LOCKED";
         await msg.react("✅");
         db.addPoints(msg.author.id, hintUsed ? 1 : 2);
-        if (hintMsgId) {
-            const hMsg = await msg.channel.messages.fetch(hintMsgId).catch(() => null);
-            if (hMsg?.deletable) hMsg.delete().catch(() => {});
-        }
-        setTimeout(() => { if (msg.deletable) msg.delete().catch(() => {}); startNextRound(msg.channel); }, 2000);
+        setTimeout(() => { if (msg.deletable) msg.delete(); startNextRound(msg.channel); }, 2000);
     } else if (msg.content.length > 2) {
         await msg.react("❌");
-        setTimeout(() => { if (msg.deletable) msg.delete().catch(() => {}); }, 1500);
+        setTimeout(() => { if (msg.deletable) msg.delete(); }, 1500);
     }
 });
 
-// ================= [ STARTUP ENGINE ] =================
+// --- STARTUP ---
 client.once(Events.ClientReady, async () => {
-    console.log(`🚀 LAGGING LEGENDS ONLINE | Logged in as ${client.user.tag}`);
-    
-    // Slight delay to ensure channel availability
+    console.log("🚀 LAGGING LEGENDS ONLINE");
     setTimeout(async () => {
         const chan = await client.channels.fetch(GUESS_CHANNEL_ID).catch(() => null);
-        if (chan) {
-            console.log("🌍 Guessing Engine Initialized.");
-            startNextRound(chan);
-        } else {
-            console.log("❌ Startup Error: Could not find Guessing Channel.");
-        }
-    }, 3000);
+        if (chan) startNextRound(chan);
+    }, 2000);
 });
 
 client.login(DISCORD_TOKEN);
