@@ -1,9 +1,8 @@
 "use strict";
 require("dotenv").config();
 const { 
-    Client, GatewayIntentBits, SlashCommandBuilder, Routes, 
-    Events, EmbedBuilder, ActionRowBuilder, ButtonBuilder, 
-    ButtonStyle, REST 
+    Client, Events, EmbedBuilder, ActionRowBuilder, ButtonBuilder, 
+    ButtonStyle, REST, Routes, SlashCommandBuilder 
 } = require("discord.js");
 const db = require("./db"); 
 const ms = require("ms");
@@ -12,29 +11,25 @@ const { DISCORD_TOKEN, CLIENT_ID, GUILD_ID } = process.env;
 
 // ================= [ CONFIGURATION ] =================
 const GUESS_CHANNEL_ID = "1497453944702500864";
-const VERIFY_CHANNEL_ID = "1494235821899907153";
 const MODLOGS_CHANNEL = "1494273679951925248";
 const STAFF_ADMIN_CHANNEL = "1494273679951925248";
-
 const VERIFIED_ROLE_ID = "1494237255148371998";
 const VERIFY_ADMIN_ROLE = "1494274846912417812";
+
 const PUNISH_ACCESS_ROLES = ["1494276990700753018", "1494277529614159893", "1494284826747076619"];
+const BAN_ONLY_ROLE = "1494284826747076619";
+const BYPASS_SELF_ROLE = "1494274846912417812";
 
 const MILESTONE_ROLE_1 = "1494921889313984552";
 const MILESTONE_ROLE_2 = "1494922588428697654";
 const MILESTONE_RANK_INDEX = 6; 
 
 const rankHierarchy = [
-  { id: "1494281388092952576", cd: 86400000 },    // Rank 1
-  { id: "1494918304211402833", cd: 259200000 },   // Rank 2
-  { id: "1494919385654235276", cd: 432000000 },   // Rank 3
-  { id: "1494919521922846790", cd: 604800000 },   // Rank 4
-  { id: "1494919940526964883", cd: 1209600000 },  // Rank 5
-  { id: "1494920068667146251", cd: 1209600000 },  // Rank 6
-  { id: "1494920425346433045", cd: 2160000000 },  // Rank 7
-  { id: "1494920607366647979", cd: 2160000000 },  // Rank 8
-  { id: "1494920909130301490", cd: 2592000000 },  // Rank 9
-  { id: "1494921290061053992", cd: 0 }            // Rank 10
+  { id: "1494281388092952576" }, { id: "1494918304211402833" }, 
+  { id: "1494919385654235276" }, { id: "1494919521922846790" },
+  { id: "1494919940526964883" }, { id: "1494920068667146251" },
+  { id: "1494920425346433045" }, { id: "1494920607366647979" },
+  { id: "1494920909130301490" }, { id: "1494921290061053992" }
 ];
 
 const placeDatabase = [
@@ -43,9 +38,6 @@ const placeDatabase = [
     { name: "USA", url: "https://images.pexels.com/photos/1590924/pexels-photo-1590924.jpeg" },
     { name: "Japan", url: "https://images.pexels.com/photos/590471/pexels-photo-590471.jpeg" },
     { name: "France", url: "https://images.pexels.com/photos/699466/pexels-photo-699466.jpeg" },
-    { name: "Bangladesh", url: "https://images.pexels.com/photos/20121115/pexels-photo-20121115.jpeg" },
-    { name: "Russia", url: "https://images.pexels.com/photos/2362325/pexels-photo-2362325.jpeg" },
-    { name: "Turkey", url: "https://images.pexels.com/photos/2048865/pexels-photo-2048865.jpeg" },
     { name: "Italy", url: "https://images.pexels.com/photos/1797161/pexels-photo-1797161.jpeg" }
 ];
 
@@ -55,9 +47,6 @@ const client = new Client({ intents: [3276799] });
 let currentCountry = "";
 let engineStatus = "IDLE";
 let hintUsed = false;
-let lastGameMsgId = null;
-let hintMsgId = null;
-let skipCooldowns = new Map();
 
 async function startNextRound(channel) {
     if (!channel) return;
@@ -66,30 +55,17 @@ async function startNextRound(channel) {
     currentCountry = data.name;
     hintUsed = false;
 
-    try {
-        if (hintMsgId) {
-            const hMsg = await channel.messages.fetch(hintMsgId).catch(() => null);
-            if (hMsg?.deletable) await hMsg.delete().catch(() => {});
-        }
-        if (lastGameMsgId) {
-            const old = await channel.messages.fetch(lastGameMsgId).catch(() => null);
-            if (old?.deletable) await old.delete().catch(() => {});
-        }
-    } catch (e) {}
-
     const embed = new EmbedBuilder()
         .setTitle("🌍 Guess the Place!")
-        .setDescription("Type the **Country Name** in chat to win 2 points!")
-        .setImage(data.url)
-        .setColor(0xFFD700);
+        .setDescription("Type the **Country Name** to win 2 points!")
+        .setImage(data.url).setColor(0xFFD700);
 
     const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId("reveal_letter").setLabel("Reveal first letter").setStyle(ButtonStyle.Warning),
-        new ButtonBuilder().setCustomId("skip_flag").setLabel("Skip flag").setStyle(ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId("reveal_letter").setLabel("Reveal Letter").setStyle(ButtonStyle.Warning),
+        new ButtonBuilder().setCustomId("skip_flag").setLabel("Skip").setStyle(ButtonStyle.Danger)
     );
 
-    const sent = await channel.send({ embeds: [embed], components: [row] });
-    lastGameMsgId = sent.id;
+    await channel.send({ embeds: [embed], components: [row] });
     engineStatus = "ACTIVE";
 }
 
@@ -99,35 +75,16 @@ client.on(Events.InteractionCreate, async (itx) => {
 
     if (itx.isButton()) {
         if (customId === "verify_btn") {
-            if (member.roles.cache.has(VERIFIED_ROLE_ID)) return itx.reply({ content: "ℹ️ You are already verified!", ephemeral: true });
-            const ageDays = Math.floor((Date.now() - user.createdTimestamp) / (1000 * 60 * 60 * 24));
             await member.roles.add(VERIFIED_ROLE_ID);
-            await itx.reply({ content: "✅ You have been successfully verified, go to 🧻 | roles to unlock more features!", ephemeral: true });
-            let ageWarning = ageDays < 30 ? `\n⚠️ **ACCOUNT CREATED ${ageDays} DAYS AGO!** ⚠️` : "";
-            guild.channels.cache.get(MODLOGS_CHANNEL)?.send(`<@${user.id}> has verified in the server.${ageWarning}`);
-            return;
+            return itx.reply({ content: "✅ Verified!", ephemeral: true });
         }
-
         if (customId === "reveal_letter" && engineStatus === "ACTIVE") {
             if (hintUsed) return itx.deferUpdate();
             hintUsed = true;
-            const hMsg = await itx.channel.send(`## *${user.username} revealed the first letter!*\n**${currentCountry[0].toUpperCase()}**`);
-            hintMsgId = hMsg.id;
-            const newEmbed = EmbedBuilder.from(itx.message.embeds[0]).setDescription("Win **1 Point** by being the first to guess correctly!");
-            await itx.update({ embeds: [newEmbed], components: [new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId("hint_done").setLabel("Hint Given").setStyle(ButtonStyle.Secondary).setDisabled(true),
-                new ButtonBuilder().setCustomId("skip_flag").setLabel("Skip flag").setStyle(ButtonStyle.Danger)
-            )]});
-            return;
+            return itx.reply(`The first letter is: **${currentCountry[0].toUpperCase()}**`);
         }
-
         if (customId === "skip_flag" && engineStatus === "ACTIVE") {
-            const now = Date.now();
-            const validSkips = (skipCooldowns.get(user.id) || []).filter(t => now - t < 3600000);
-            if (validSkips.length >= 3) return itx.reply({ content: "⚠️ Limit: 3 skips per hour!", ephemeral: true });
-            validSkips.push(now);
-            skipCooldowns.set(user.id, validSkips);
-            await itx.reply({ content: `<@${user.id}> skipped. It was **${currentCountry}**.` });
+            await itx.reply(`Skipped! It was **${currentCountry}**.`);
             return startNextRound(itx.channel);
         }
     }
@@ -137,40 +94,70 @@ client.on(Events.InteractionCreate, async (itx) => {
     // --- POINTS COMMANDS ---
     if (commandName === "check_points") {
         const target = options.getUser("user") || user;
-        const points = db.getPoints(target.id);
-        return itx.reply({ content: `💰 **${target.username}** currently has **${points} points**.` });
+        return itx.reply(`💰 **${target.username}** has **${db.getPoints(target.id)} points**.`);
     }
     if (commandName === "daily") {
         const reward = db.claimDaily(user.id);
-        if (!reward) return itx.reply({ content: "⏳ You already claimed your daily points today!", ephemeral: true });
-        return itx.reply({ content: `✅ You claimed **${reward} points**! Come back tomorrow.` });
+        return itx.reply(reward ? `✅ You claimed **${reward} points**!` : "⏳ Already claimed today.");
     }
     if (commandName === "work_points") {
         db.addPoints(user.id, 5);
-        return itx.reply({ content: "🛠️ Work recorded. **5 points** added to your balance." });
+        return itx.reply("🛠️ Work recorded. **5 points** added.");
     }
 
-    // --- PUNISH COMMANDS ---
+    // --- PUNISHMENT REVERT ---
     if (commandName === "punish_revert") {
-        if (!member.roles.cache.has(VERIFY_ADMIN_ROLE)) return itx.reply({ content: "❌ Leadership only.", ephemeral: true });
+        if (!member.roles.cache.has(VERIFY_ADMIN_ROLE)) return itx.reply("❌ LL Leadership only.");
+        const target = options.getUser("target");
+        const type = options.getString("type");
+        
+        await target.send(`## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT REVERSAL\n\n🟢 Punishment Reversal\n\nHello, <@${target.id}>\n\nYour **${type}** record has been officially removed from your modlogs in the Lagging Legends Community.\n\nRepeating actions will result in harsher disciplinary action.`).catch(()=>{});
         db.removePunishment(options.getString("case_id"));
-        return itx.reply({ content: `✅ Case ${options.getString("case_id")} reverted.`, ephemeral: true });
+        return itx.reply(`✅ Reversal issued for Case ${options.getString("case_id")}.`);
     }
 
-    if (commandName === "timeout" || commandName === "punish") {
-        if (!PUNISH_ACCESS_ROLES.some(id => member.roles.cache.has(id))) return itx.reply({ content: "❌ Unauthorized.", ephemeral: true });
-        
-        await itx.deferReply();
-
+    // --- TIMEOUT COMMAND ---
+    if (commandName === "timeout") {
         const target = options.getUser("target");
         const targetMember = options.getMember("target");
+        if (target.id === user.id && !member.roles.cache.has(BYPASS_SELF_ROLE)) return itx.reply({ content: "⚠️ You cannot timeout yourself!", ephemeral: true });
+        if (!PUNISH_ACCESS_ROLES.some(id => member.roles.cache.has(id))) return itx.reply({ content: "❌ Unauthorized.", ephemeral: true });
+        
+        const durationStr = options.getString("duration");
+        const durationMs = ms(durationStr);
+        if (!durationMs || durationMs > 2419200000) return itx.reply({ content: "⚠️ Invalid duration (Max 28d).", ephemeral: true });
+
+        await itx.deferReply({ ephemeral: true });
         const reason = options.getString("reason");
         const evidence = options.getString("evidence");
-        const type = commandName === "timeout" ? "Mute" : options.getString("type");
-        const durationStr = options.getString("duration") || "";
+        const caseId = db.addPunishment(target.id, "Mute", reason, evidence, user.id);
+
+        const muteDM = `## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT\n\n## ⚫️ Mute (${durationStr})\n\n**Hello, <@${target.id}>**\n\nYou have been Muted by the LL Server Administration due to a violation of the community rules. During this time, you will be unable to send messages in designated channels.\n\n**Duration: ${durationStr}**\nReason: ${reason}\nEvidence: ${evidence}\n\nRepeated violations after your mute expires may result in stronger punishments, including kicks, longer mutes, or permanent removal from the server.`;
+
+        await target.send(muteDM).catch(() => {}); 
+        await targetMember.timeout(durationMs, reason).catch(()=>{});
+
+        const log = new EmbedBuilder().setTitle(`Mute // Case ${caseId}`).setDescription(`**Target:** <@${target.id}>\n**Reason:** ${reason}`).setColor(0x000000);
+        guild.channels.cache.get(MODLOGS_CHANNEL).send({ embeds: [log] });
+        return itx.editReply(`✅ Issued **Mute // Case ${caseId}**.`);
+    }
+
+    // --- PUNISH COMMAND ---
+    if (commandName === "punish") {
+        const type = options.getString("type");
+        const target = options.getUser("target");
+        if (target.id === user.id && !member.roles.cache.has(BYPASS_SELF_ROLE)) return itx.reply({ content: "⚠️ You cannot punish yourself!", ephemeral: true });
+
+        const isGen = member.roles.cache.has("1494276990700753018") || member.roles.cache.has("1494277529614159893");
+        if (member.roles.cache.has(BAN_ONLY_ROLE) && !isGen && type !== "Ban") return itx.reply({ content: "❌ Only Bans permitted.", ephemeral: true });
+        if (!isGen && !member.roles.cache.has(BAN_ONLY_ROLE)) return itx.reply({ content: "❌ Unauthorized.", ephemeral: true });
+
+        await itx.deferReply({ ephemeral: true });
+        const reason = options.getString("reason");
+        const evidence = options.getString("evidence");
+        const caseId = db.addPunishment(target.id, type, reason, evidence, user.id);
 
         const templates = {
-            "Mute": `## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT\n\n## ⚫️ Mute (${durationStr})\n\n**Hello, <@${target.id}>**\n\nYou have been Muted by the LL Server Administration due to a violation of the community rules. During this time, you will be unable to send messages in designated channels.\n\n**Duration: ${durationStr}**\nReason: ${reason}\nEvidence: ${evidence}\n\nRepeated violations after your mute expires may result in stronger punishments, including kicks, longer mutes, or permanent removal from the server.`,
             "Verbal Warning": `## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT\n\n## 🔴 Verbal Warning\n\n**Hello, <@${target.id}>**\n\nYou have received a Verbal Warning from the LL Server Administration due to a rule violation. Please review the server rules and ensure this behavior is not repeated.\n\nReason: ${reason}\nEvidence: ${evidence}\n\nRepeating this behavior may result in further disciplinary action, including stronger punishments depending on the severity of future violations.`,
             "Staff Warning": `## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT\n\n## 🟡 Staff Warning\n\n**Hello, <@${target.id}>**\n\nYou have received a Staff Warning from the LL Server Administration due to misconduct or failure to meet staff expectations. This serves as a formal notice to improve your behavior and performance.\n\nReason: ${reason}\nEvidence: ${evidence}\n\nFailure to improve or repeated issues may result in stronger action, including suspension or termination from your staff position.`,
             "Suspension": `## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT\n\n## 🟣 Suspension\n\n**Hello, <@${target.id}>**\n\nYou have been placed under Suspension by the LL Server Administration due to a serious rule violation or staff misconduct. During this period, your permissions and responsibilities may be restricted while management reviews the situation.\n\nReason: ${reason}\nEvidence: ${evidence}\n\nFurther violations or failure to cooperate during this review may result in permanent removal from your position or additional disciplinary action.`,
@@ -179,65 +166,68 @@ client.on(Events.InteractionCreate, async (itx) => {
             "Ban": `## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT\n\n## ⚫️ Ban\n\n**Hello, <@${target.id}>**\n\nYou have been Banned from Lagging Legends by the LL Server Administration due to severe rule violations, repeated misconduct, or actions harmful to the community. Your access to the server has been permanently removed.\n\nReason: ${reason}\nEvidence: ${evidence}\n\nAny appeal, if allowed, must be submitted respectfully through the proper appeal process. False or disrespectful appeals may be denied immediately.`
         };
 
-        const caseId = db.addPunishment(target.id, type, reason, evidence, user.id);
-        await target.send(templates[type]).catch(() => {});
-        if (type === "Mute") await targetMember.timeout(ms(durationStr), reason);
-        if (type === "Kick") await targetMember.kick(reason);
-        if (type === "Ban") await guild.members.ban(target.id, { reason });
+        await target.send(templates[type]).catch(() => {}); 
+        if (type === "Kick") await guild.members.kick(target.id, reason).catch(()=>{});
+        if (type === "Ban") await guild.members.ban(target.id, { reason }).catch(()=>{});
 
         const log = new EmbedBuilder().setTitle(`${type} // Case ${caseId}`).setDescription(`**Target:** <@${target.id}>\n**Reason:** ${reason}`).setColor(0xFF0000);
         guild.channels.cache.get(MODLOGS_CHANNEL).send({ embeds: [log] });
-        return itx.editReply({ content: `✅ Issued **${type} // Case ${caseId}**.` });
+        return itx.editReply(`✅ Issued **${type} // Case ${caseId}**.`);
     }
 
-    // --- PROMOTION COMMAND ---
+    // --- PROMOTION ---
     if (commandName === "promote") {
-        if (itx.channelId !== STAFF_ADMIN_CHANNEL) return itx.reply({ content: "⚠️ Wrong channel.", ephemeral: true });
+        if (itx.channelId !== STAFF_ADMIN_CHANNEL) return itx.reply("⚠️ Wrong channel.");
         const targetMember = options.getMember("target");
-        const moveAmount = parseInt(options.getString("type"));
+        const move = parseInt(options.getString("type"));
         const hierarchyIds = rankHierarchy.map(r => r.id);
-        
-        let targetRankIndex = hierarchyIds.findIndex(id => targetMember.roles.cache.has(id));
-        if (targetRankIndex === -1) targetRankIndex = 0; 
-        const newRankIndex = targetRankIndex + moveAmount;
+        let currentIdx = hierarchyIds.findIndex(id => targetMember.roles.cache.has(id));
+        if (currentIdx === -1) currentIdx = 0;
+        const newIdx = Math.min(currentIdx + move, hierarchyIds.length - 1);
 
-        if (targetRankIndex !== 0) await targetMember.roles.remove(hierarchyIds[targetRankIndex]);
-        await targetMember.roles.add(hierarchyIds[newRankIndex]);
-        if (newRankIndex >= MILESTONE_RANK_INDEX) await targetMember.roles.add([MILESTONE_ROLE_1, MILESTONE_ROLE_2]);
+        if (currentIdx !== 0) await targetMember.roles.remove(hierarchyIds[currentIdx]);
+        await targetMember.roles.add(hierarchyIds[newIdx]);
+        if (newIdx >= MILESTONE_RANK_INDEX) await targetMember.roles.add([MILESTONE_ROLE_1, MILESTONE_ROLE_2]);
 
-        return itx.reply({ content: `## *<@${targetMember.id}> Promoted by ${user.username}. 🎉*\n**Reason: ${options.getString("reason")}**` });
+        return itx.reply(`## *<@${targetMember.id}> Promoted by ${user.username}. 🎉*\n**Reason: ${options.getString("reason")}**`);
     }
 
-    // --- VERIFY PANEL COMMAND ---
     if (commandName === "verify_panel") {
-        if (!member.permissions.has("Administrator")) return itx.reply({ content: "❌ Admin only.", ephemeral: true });
-        const embed = new EmbedBuilder().setTitle("🛡️ LL Verification").setDescription("Click below to verify.").setColor(0x00FF00);
         const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("verify_btn").setLabel("Verify").setStyle(ButtonStyle.Success));
-        return itx.reply({ embeds: [embed], components: [row] });
+        return itx.reply({ content: "## Lagging Legends Verification\nClick below to verify.", components: [row] });
     }
 });
 
-// --- GUESSING LOGIC ---
+// --- GAME LOGIC ---
 client.on(Events.MessageCreate, async (msg) => {
     if (msg.channel.id !== GUESS_CHANNEL_ID || msg.author.bot || engineStatus !== "ACTIVE") return;
     if (msg.content.toLowerCase().trim() === currentCountry.toLowerCase().trim()) {
         engineStatus = "LOCKED";
         await msg.react("✅");
-        db.addPoints(msg.author.id, hintUsed ? 1 : 2);
-        setTimeout(() => { if (msg.deletable) msg.delete(); startNextRound(msg.channel); }, 2000);
-    } else if (msg.content.length > 2) {
-        await msg.react("❌");
-        setTimeout(() => { if (msg.deletable) msg.delete(); }, 1500);
+        db.addPoints(msg.author.id, 2);
+        setTimeout(() => { if (msg.deletable) msg.delete().catch(()=>{}); startNextRound(msg.channel); }, 2000);
     }
 });
 
 // --- STARTUP ---
 client.once(Events.ClientReady, async () => {
-    console.log("🚀 LAGGING LEGENDS ONLINE");
-    setTimeout(async () => {
-        const chan = await client.channels.fetch(GUESS_CHANNEL_ID).catch(() => null);
-        if (chan) startNextRound(chan);
-    }, 2000);
+    const commands = [
+        new SlashCommandBuilder().setName('check_points').setDescription('Check points').addUserOption(o=>o.setName('user').setDescription('User')),
+        new SlashCommandBuilder().setName('daily').setDescription('Claim daily'),
+        new SlashCommandBuilder().setName('work_points').setDescription('Staff work'),
+        new SlashCommandBuilder().setName('verify_panel').setDescription('Admin only'),
+        new SlashCommandBuilder().setName('punish_revert').setDescription('Revert punishment').addUserOption(o=>o.setName('target').setRequired(true)).addStringOption(o=>o.setName('type').setRequired(true)).addStringOption(o=>o.setName('case_id').setRequired(true)),
+        new SlashCommandBuilder().setName('promote').setDescription('Promote staff').addUserOption(o=>o.setName('target').setRequired(true)).addStringOption(o=>o.setName('type').setRequired(true).addChoices({name:'+1',value:'1'},{name:'+2',value:'2'})).addStringOption(o=>o.setName('reason').setRequired(true)),
+        new SlashCommandBuilder().setName('punish').setDescription('Punish').addUserOption(o=>o.setName('target').setRequired(true)).addStringOption(o=>o.setName('type').setRequired(true).addChoices({name:'Verbal Warning',value:'Verbal Warning'},{name:'Staff Warning',value:'Staff Warning'},{name:'Suspension',value:'Suspension'},{name:'Termination',value:'Termination'},{name:'Kick',value:'Kick'},{name:'Ban',value:'Ban'})).addStringOption(o=>o.setName('reason').setRequired(true)).addStringOption(o=>o.setName('evidence').setRequired(true)),
+        new SlashCommandBuilder().setName('timeout').setDescription('Mute').addUserOption(o=>o.setName('target').setRequired(true)).addStringOption(o=>o.setName('duration').setRequired(true)).addStringOption(o=>o.setName('reason').setRequired(true)).addStringOption(o=>o.setName('evidence').setRequired(true))
+    ].map(c => c.toJSON());
+
+    const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
+    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+    
+    console.log("🚀 ONLINE | COMMANDS REGISTERED");
+    const chan = await client.channels.fetch(GUESS_CHANNEL_ID).catch(() => null);
+    if (chan) startNextRound(chan);
 });
 
 client.login(DISCORD_TOKEN);
