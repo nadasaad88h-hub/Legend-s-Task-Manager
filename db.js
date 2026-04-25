@@ -15,14 +15,23 @@ db.exec(`
 `);
 
 module.exports = {
-  getCooldown: (key) => db.prepare("SELECT expires FROM cooldowns WHERE cooldown_key = ?").get(key)?.expires || 0,
+  getCooldown: (key) => {
+    const row = db.prepare("SELECT expires FROM cooldowns WHERE cooldown_key = ?").get(key);
+    return row ? row.expires : 0;
+  },
   setCooldown: (key, ts) => {
     db.prepare("INSERT INTO cooldowns (cooldown_key, expires) VALUES (?, ?) ON CONFLICT(cooldown_key) DO UPDATE SET expires = excluded.expires").run(key, ts);
   },
-  getPoints: (uid) => db.prepare("SELECT points FROM points WHERE user_id = ?").get(uid)?.points || 0,
-  addPoints: (uid, amt) => {
-    db.prepare("INSERT INTO points (user_id, points) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET points = points + excluded.points").run(uid, amt, amt);
-    return db.prepare("SELECT points FROM points WHERE user_id = ?").get(uid).points;
+  getPoints: (uid) => {
+    const row = db.prepare("SELECT points FROM points WHERE user_id = ?").get(uid);
+    return row ? row.points : 0;
   },
-  getTopPoints: (limit) => db.prepare("SELECT user_id AS userId, points FROM points ORDER BY points DESC LIMIT ?").all(limit)
+  addPoints: (uid, amt) => {
+    db.prepare("INSERT INTO points (user_id, points) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET points = points + excluded.points").run(uid, amt);
+    const row = db.prepare("SELECT points FROM points WHERE user_id = ?").get(uid);
+    return row ? row.points : 0;
+  },
+  getTopPoints: (limit) => {
+    return db.prepare("SELECT user_id AS userId, points FROM points ORDER BY points DESC LIMIT ?").all(limit) || [];
+  }
 };
