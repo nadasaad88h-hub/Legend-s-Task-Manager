@@ -46,7 +46,7 @@ const placeDatabase = [
     { name: "Switzerland", url: "https://images.unsplash.com/photo-1527668752968-14dc70a27c95" },
     { name: "Mexico", url: "https://images.unsplash.com/photo-1512813588147-6c5d10bad13b" },
     { name: "Norway", url: "https://images.unsplash.com/photo-1513519107127-1bed33748e4c" },
-    { name: "India", url: "https://images.unsplash.com/photo-1524492707947-282e7a465bab" },
+    { name: "India", url: "https://images.unsplash.com/photo-1548013146-72479768bbaa" }, // NEW STABLE INDIA LINK
     { name: "China", url: "https://images.unsplash.com/photo-1508804185872-d7badad00f7d" },
     { name: "Spain", url: "https://images.unsplash.com/photo-1543783230-278358426bb0" },
     { name: "Portugal", url: "https://images.unsplash.com/photo-1555881450-236c39ee896d" },
@@ -61,6 +61,7 @@ const placeDatabase = [
     { name: "South Korea", url: "https://images.unsplash.com/photo-1517154421773-0529f29ea451" },
     { name: "Germany", url: "https://images.unsplash.com/photo-1467269204594-9661b134dd2b" }
 ];
+
 
 // --- GAME ENGINE ---
 const gameEngines = new Map();
