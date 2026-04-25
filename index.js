@@ -98,7 +98,7 @@ async function startNewRound(channel) {
             .setTitle("🌍 Guess the Place!")
             .setDescription("Win **2 points** by being the first to guess correctly!")
             .setColor(0x00AE86)
-            .setImage(data.url); // Set at the end to ensure it triggers correctly
+            .setImage(data.url);
             
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId("reveal_letter").setLabel("Hint").setStyle(ButtonStyle.Secondary),
@@ -106,6 +106,17 @@ async function startNewRound(channel) {
         );
         
         const sent = await channel.send({ embeds: [embed], components: [row] });
+        
+        // --- EMBED GUARD ---
+        // Wait 1.5 seconds for Discord to process the image. If fail, retry.
+        setTimeout(async () => {
+            const verifyMsg = await channel.messages.fetch(sent.id).catch(() => null);
+            if (!verifyMsg || !verifyMsg.embeds[0]?.image?.url) {
+                if (verifyMsg?.deletable) await verifyMsg.delete().catch(() => {});
+                return startNewRound(channel); // Retry automatically
+            }
+        }, 1500);
+
         engine.currentAnswer = data.name;
         engine.lastMsgId = sent.id;
         engine.status = 'ACTIVE';
@@ -187,10 +198,12 @@ client.on(Events.InteractionCreate, async (itx) => {
     } catch (e) { console.error(e); }
 });
 
-// --- GUESS LISTENER (Reacts/Deletes Everything Instantly) ---
+// --- GUESS LISTENER ---
 client.on(Events.MessageCreate, async (msg) => {
     if (msg.author.bot || msg.channel.id !== GUESS_CHANNEL_ID) return;
     const engine = getEngine(msg.channel.id);
+
+    // Auto-delete everything that isn't a bot message or valid game interaction
     if (engine.status !== 'ACTIVE' || !engine.currentAnswer) {
         return msg.delete().catch(() => {});
     }
@@ -209,14 +222,13 @@ client.on(Events.MessageCreate, async (msg) => {
             engine.hintMsgId = null;
         }
 
-        // Fast transition
         setTimeout(() => { 
             if (msg.deletable) msg.delete().catch(() => {}); 
             startNewRound(msg.channel); 
         }, 1500);
     } else {
-        // Immediate reaction and deletion for wrong/random messages
         await msg.react("❌").catch(() => {});
+        // Immediate cleanup of non-answers
         setTimeout(() => { if (msg.deletable) msg.delete().catch(() => {}); }, 1000);
     }
 });
