@@ -71,11 +71,20 @@ function getEngine(channelId) {
     return gameEngines.get(channelId);
 }
 
-async function startNewRound(channel) {
-    const engine = getEngine(channel.id);
-    if (engine.status === 'LOCKED' && (Date.now() - engine.lastUpdate < 4000)) return;
-    engine.status = 'LOCKED';
-    engine.lastUpdate = Date.now();
+async function getEngine(channelId) {
+    if (!gameEngines.has(channelId)) {
+        gameEngines.set(channelId, { 
+            status: 'IDLE', 
+            currentAnswer: null, 
+            lastMsgId: null, 
+            lastUpdate: Date.now(),
+            skipsUsed: 0,
+            lastSkipReset: Date.now() 
+        });
+    }
+    return gameEngines.get(channelId);
+}
+
 
     try {
         if (engine.lastMsgId) {
@@ -100,15 +109,24 @@ client.on(Events.InteractionCreate, async (itx) => {
     try {
         if (itx.isButton()) {
             const engine = getEngine(itx.channelId);
-            if (itx.customId === "reveal_letter") {
-                if (engine.status !== 'ACTIVE' || !engine.currentAnswer) return itx.reply({ content: "No active round.", ephemeral: true });
-                return itx.reply({ content: `💡 First letter: **${engine.currentAnswer[0].toUpperCase()}**`, ephemeral: true });
+                if (itx.customId === "skip_flag") {
+            const engine = getEngine(itx.channelId);
+            if (engine.status !== 'ACTIVE') return itx.reply({ content: "Please wait...", ephemeral: true });
+
+            if (Date.now() - engine.lastSkipReset > 3600000) {
+                engine.skipsUsed = 0;
+                engine.lastSkipReset = Date.now();
             }
-            if (itx.customId === "skip_flag") {
-                if (engine.status !== 'ACTIVE') return itx.reply({ content: "Please wait...", ephemeral: true });
-                await itx.reply(`🚩 It was **${engine.currentAnswer}**.`);
-                return startNewRound(itx.channel);
+
+            if (engine.skipsUsed >= 3) {
+                return itx.reply({ content: "❌ **Skip limit reached!** (3 per hour).", ephemeral: true });
             }
+
+            engine.skipsUsed++;
+            await itx.reply(`🚩 Skipped! (${engine.skipsUsed}/3). It was **${engine.currentAnswer}**.`);
+            return startNewRound(itx.channel);
+        }
+
             if (itx.customId === "verify_btn") {
                 await itx.member.roles.add(VERIFIED_ROLE_ID).catch(() => {});
                 return itx.reply({ content: "✅ Verified!", ephemeral: true });
