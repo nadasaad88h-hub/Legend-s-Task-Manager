@@ -11,7 +11,7 @@ const ms = require("ms");
 const { DISCORD_TOKEN, CLIENT_ID, GUILD_ID } = process.env;
 
 // --- CONFIGURATION ---
-const GUESS_CHANNEL_ID = "1497522337757790258"; // UPDATED CHANNEL ID
+const GUESS_CHANNEL_ID = "1497522337757790258";
 const GAMES_CHANNEL_ID = "1497454650880950322";
 const MODLOGS_CHANNEL = "1494273679951925248";
 const VERIFIED_ROLE_ID = "1494237255148371998";
@@ -67,14 +67,8 @@ const gameEngines = new Map();
 function getEngine(channelId) {
     if (!gameEngines.has(channelId)) {
         gameEngines.set(channelId, { 
-            status: 'IDLE', 
-            currentAnswer: null, 
-            lastMsgId: null, 
-            lastUpdate: Date.now(),
-            skipsUsed: 0,
-            lastSkipReset: Date.now(),
-            hintUsed: false,
-            hintMsgId: null
+            status: 'IDLE', currentAnswer: null, lastMsgId: null, lastUpdate: Date.now(),
+            skipsUsed: 0, lastSkipReset: Date.now(), hintUsed: false, hintMsgId: null
         });
     }
     return gameEngines.get(channelId);
@@ -82,12 +76,11 @@ function getEngine(channelId) {
 
 async function startNewRound(channel) {
     const engine = getEngine(channel.id);
-    if (engine.status === 'LOCKED' && (Date.now() - engine.lastUpdate < 4000)) return;
+    if (engine.status === 'LOCKED' && (Date.now() - engine.lastUpdate < 2000)) return;
     engine.status = 'LOCKED';
     engine.lastUpdate = Date.now();
     engine.hintUsed = false;
     
-    // Cleanup Hint Message
     if (engine.hintMsgId) {
         const hMsg = await channel.messages.fetch(engine.hintMsgId).catch(() => null);
         if (hMsg?.deletable) await hMsg.delete().catch(() => {});
@@ -101,13 +94,11 @@ async function startNewRound(channel) {
         }
         
         const data = placeDatabase[Math.floor(Math.random() * placeDatabase.length)];
-        const imageUrl = data.url;
-
         const embed = new EmbedBuilder()
             .setTitle("🌍 Guess the Place!")
             .setDescription("Win **2 points** by being the first to guess correctly!")
-            .setImage(imageUrl)
-            .setColor(0x00AE86);
+            .setColor(0x00AE86)
+            .setImage(data.url); // Set at the end to ensure it triggers correctly
             
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId("reveal_letter").setLabel("Hint").setStyle(ButtonStyle.Secondary),
@@ -129,20 +120,14 @@ client.on(Events.InteractionCreate, async (itx) => {
             
             if (itx.customId === "reveal_letter") {
                 if (engine.status !== 'ACTIVE' || !engine.currentAnswer || engine.hintUsed) return itx.deferUpdate();
-                
                 engine.hintUsed = true;
                 const letter = engine.currentAnswer[0].toUpperCase();
-                
-                const oldEmbed = EmbedBuilder.from(itx.message.embeds[0])
-                    .setDescription("Win **1 Point** by being the first to guess correctly!");
-                
+                const oldEmbed = EmbedBuilder.from(itx.message.embeds[0]).setDescription("Win **1 Point** by being the first to guess correctly!");
                 const newRow = new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId("hint_disabled").setLabel("Hint Given").setStyle(ButtonStyle.Secondary).setDisabled(true),
                     new ButtonBuilder().setCustomId("skip_flag").setLabel("Skip").setStyle(ButtonStyle.Danger)
                 );
-
                 await itx.update({ embeds: [oldEmbed], components: [newRow] });
-                
                 const hMsg = await itx.channel.send(`## *${itx.user} has revealed the first letter!*\n**${letter}**`);
                 engine.hintMsgId = hMsg.id;
                 return;
@@ -150,17 +135,13 @@ client.on(Events.InteractionCreate, async (itx) => {
 
             if (itx.customId === "skip_flag") {
                 if (engine.status !== 'ACTIVE') return itx.deferUpdate();
-                if (Date.now() - engine.lastSkipReset > 3600000) {
-                    engine.skipsUsed = 0;
-                    engine.lastSkipReset = Date.now();
-                }
+                if (Date.now() - engine.lastSkipReset > 3600000) { engine.skipsUsed = 0; engine.lastSkipReset = Date.now(); }
                 if (engine.skipsUsed >= 3) return itx.reply({ content: "❌ Skip limit reached!", ephemeral: true });
 
                 engine.skipsUsed++;
                 const skipMsg = await itx.reply({ content: `It was **${engine.currentAnswer}**.`, fetchReply: true });
                 await skipMsg.react("🚩").catch(() => {});
-                
-                setTimeout(() => skipMsg.delete().catch(() => {}), 4000);
+                setTimeout(() => skipMsg.delete().catch(() => {}), 3000);
                 return startNewRound(itx.channel);
             }
 
@@ -203,47 +184,43 @@ client.on(Events.InteractionCreate, async (itx) => {
                 return itx.editReply(`✅ Issued **${type} // Case ${caseId}**.`);
             }
         }
-        
-        if (commandName === "modlogs") {
-            const target = options.getUser("target");
-            const logs = db.getPunishments(target.id) || [];
-            if (logs.length === 0) return itx.reply({ content: "No history found.", ephemeral: true });
-            const history = logs.map(l => `**Case ${l.id}**: ${l.type} - ${l.reason}`).join("\n");
-            return itx.reply({ embeds: [new EmbedBuilder().setTitle(`Logs: ${target.tag}`).setDescription(history).setColor(0x000000)], ephemeral: true });
-        }
     } catch (e) { console.error(e); }
 });
 
-// --- GUESS LISTENER ---
+// --- GUESS LISTENER (Reacts/Deletes Everything Instantly) ---
 client.on(Events.MessageCreate, async (msg) => {
     if (msg.author.bot || msg.channel.id !== GUESS_CHANNEL_ID) return;
     const engine = getEngine(msg.channel.id);
-    if (engine.status !== 'ACTIVE' || !engine.currentAnswer) return;
+    if (engine.status !== 'ACTIVE' || !engine.currentAnswer) {
+        return msg.delete().catch(() => {});
+    }
 
-    if (msg.content.toLowerCase().trim() === engine.currentAnswer.toLowerCase().trim()) {
+    const input = msg.content.toLowerCase().trim();
+    const correct = engine.currentAnswer.toLowerCase().trim();
+
+    if (input === correct) {
         engine.status = 'LOCKED';
         await msg.react("✅").catch(() => {});
-        const points = engine.hintUsed ? 1 : 2;
-        db.addPoints(msg.author.id, points);
+        db.addPoints(msg.author.id, engine.hintUsed ? 1 : 2);
         
-        // Cleanup hint message on guess
         if (engine.hintMsgId) {
             const hMsg = await msg.channel.messages.fetch(engine.hintMsgId).catch(() => null);
             if (hMsg?.deletable) await hMsg.delete().catch(() => {});
             engine.hintMsgId = null;
         }
 
+        // Fast transition
         setTimeout(() => { 
             if (msg.deletable) msg.delete().catch(() => {}); 
             startNewRound(msg.channel); 
-        }, 2000);
-    } else if (msg.content.length > 2) {
+        }, 1500);
+    } else {
+        // Immediate reaction and deletion for wrong/random messages
         await msg.react("❌").catch(() => {});
-        setTimeout(() => { if (msg.deletable) msg.delete().catch(() => {}); }, 3000);
+        setTimeout(() => { if (msg.deletable) msg.delete().catch(() => {}); }, 1000);
     }
 });
 
-// --- REGISTRATION ---
 client.once(Events.ClientReady, async () => {
     const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
     const cmds = [
