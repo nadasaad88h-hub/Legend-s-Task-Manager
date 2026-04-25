@@ -206,21 +206,35 @@ client.on(Events.MessageCreate, async (msg) => {
     }
 });
 
-// --- REGISTRATION ---
 client.once(Events.ClientReady, async () => {
     const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
     const cmds = [
-        new SlashCommandBuilder().setName("daily").setDescription("Daily points"),
-        new SlashCommandBuilder().setName("work_points").setDescription("Work points"),
-        new SlashCommandBuilder().setName("check_points").setDescription("Leaderboard"),
-        new SlashCommandBuilder().setName("verify_panel").setDescription("Deploy verification"),
-        new SlashCommandBuilder().setName("timeout").setDescription("Mute user").addUserOption(o=>o.setName("target").setDescription("User").setRequired(true)).addStringOption(o=>o.setName("duration").setDescription("Duration").setRequired(true)).addStringOption(o=>o.setName("reason").setDescription("Reason").setRequired(true)).addStringOption(o=>o.setName("evidence").setDescription("Evidence URL").setRequired(true)),
-        new SlashCommandBuilder().setName("punish").setDescription("Punish user").addUserOption(o=>o.setName("target").setDescription("User").setRequired(true)).addStringOption(o=>o.setName("type").setDescription("Punishment type").setRequired(true).addChoices({name:'Verbal Warning',value:'Verbal Warning'},{name:'Staff Warning',value:'Staff Warning'},{name:'Suspension',value:'Suspension'},{name:'Termination',value:'Termination'},{name:'Kick',value:'Kick'},{name:'Ban',value:'Ban'})).addStringOption(o=>o.setName("reason").setDescription("Reason").setRequired(true)).addStringOption(o=>o.setName("evidence").setDescription("Evidence URL").setRequired(true))
+        new SlashCommandBuilder().setName("daily").setDescription("Claim your daily points reward"),
+        new SlashCommandBuilder().setName("work_points").setDescription("Work to earn points"),
+        new SlashCommandBuilder().setName("check_points").setDescription("View the point leaderboard"),
+        new SlashCommandBuilder().setName("verify_panel").setDescription("Deploy the verification panel"),
+        new SlashCommandBuilder().setName("modlogs").setDescription("View a user's punishment history").addUserOption(o=>o.setName("target").setDescription("The user whose logs you want to see").setRequired(true)),
+        new SlashCommandBuilder().setName("timeout").setDescription("Mute a user")
+            .addUserOption(o=>o.setName("target").setDescription("The user to mute").setRequired(true))
+            .addStringOption(o=>o.setName("duration").setDescription("Duration (e.g. 1h, 1d)").setRequired(true))
+            .addStringOption(o=>o.setName("reason").setDescription("Reason for the mute").setRequired(true))
+            .addStringOption(o=>o.setName("evidence").setDescription("URL Link to evidence").setRequired(true)),
+        new SlashCommandBuilder().setName("punish").setDescription("Issue a staff punishment")
+            .addUserOption(o=>o.setName("target").setDescription("The user to punish").setRequired(true))
+            .addStringOption(o=>o.setName("type").setDescription("Punishment type").setRequired(true).addChoices(
+                {name:'Verbal Warning',value:'Verbal Warning'},{name:'Staff Warning',value:'Staff Warning'},
+                {name:'Suspension',value:'Suspension'},{name:'Termination',value:'Termination'},
+                {name:'Kick',value:'Kick'},{name:'Ban',value:'Ban'}
+            ))
+            .addStringOption(o=>o.setName("reason").setDescription("Reason for the punishment").setRequired(true))
+            .addStringOption(o=>o.setName("evidence").setDescription("URL Link to evidence").setRequired(true))
     ].map(c => c.toJSON());
+
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: cmds });
     console.log("🚀 LAGGING LEGENDS SYSTEM ONLINE");
     const chan = await client.channels.fetch(GUESS_CHANNEL_ID).catch(() => null);
     if (chan) startNewRound(chan);
 });
+
 
 client.login(DISCORD_TOKEN);
