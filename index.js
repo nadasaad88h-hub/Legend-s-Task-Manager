@@ -84,8 +84,8 @@ client.once(Events.ClientReady, async () => {
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
   const commands = [
-    new SlashCommandBuilder().setName("promote").setDescription("Promote a user").addUserOption(o => o.setName("target").setRequired(true)).addStringOption(o => o.setName("ranks").setRequired(true).addChoices({name:'1 Rank', value:'1'}, {name:'2 Ranks', value:'2'})),
-    new SlashCommandBuilder().setName("punish").setDescription("Issue punishment").addUserOption(o => o.setName("target").setRequired(true)).addStringOption(o => o.setName("type").setRequired(true).addChoices({name:'Timeout', value:'T'}, {name:'Suspension', value:'S'})).addStringOption(o => o.setName("reason").setRequired(true)),
+    new SlashCommandBuilder().setName("promote").setDescription("Promote a user").addUserOption(o => o.setName("target").setDescription("The user to promote").setRequired(true)).addStringOption(o => o.setName("ranks").setDescription("Number of ranks to promote by").setRequired(true).addChoices({name:'1 Rank', value:'1'}, {name:'2 Ranks', value:'2'})),
+    new SlashCommandBuilder().setName("punish").setDescription("Issue punishment").addUserOption(o => o.setName("target").setDescription("The user to punish").setRequired(true)).addStringOption(o => o.setName("type").setDescription("Type of punishment to issue").setRequired(true).addChoices({name:'Timeout', value:'T'}, {name:'Suspension', value:'S'})).addStringOption(o => o.setName("reason").setDescription("Reason for the punishment").setRequired(true)),
     new SlashCommandBuilder().setName("daily").setDescription("Claim 5 daily points"),
     new SlashCommandBuilder().setName("work").setDescription("Earn 3 points (30m CD)"),
     new SlashCommandBuilder().setName("balance").setDescription("Check your points")
