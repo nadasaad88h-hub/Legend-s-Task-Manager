@@ -1,517 +1,192 @@
 'use strict';
 
-// ================= [ IMPORTS ] =================
-const {
-  Client,
-  GatewayIntentBits,
-  Partials,
-  Events,
-  EmbedBuilder,
-  PermissionFlagsBits,
-  SlashCommandBuilder,
-  REST,
-  Routes,
-} = require('discord.js');
-const db = require('./db');
-const ms = require('ms');
 require('dotenv').config();
+const { 
+    Client, GatewayIntentBits, SlashCommandBuilder, Routes, 
+    Events, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
+    PermissionFlagsBits, REST, Partials
+} = require("discord.js");
+const ms = require("ms");
+const db = require("./db");
 
-// ================= [ ENVIRONMENT VARIABLES ] =================
-const TOKEN     = process.env.TOKEN;
-const CLIENT_ID = process.env.CLIENT_ID;
-const GUILD_ID  = process.env.GUILD_ID;
+// ================= [ CONFIGURATION ] =================
+const { TOKEN, CLIENT_ID, GUILD_ID } = process.env;
 
-// ================= [ ROLE IDs ] =================
-const ROLE_IDS = {
-  // Staff hierarchy (lowest → highest)
-  TRIAL_STAFF:        process.env.ROLE_TRIAL_STAFF        || '0',
-  STAFF:              process.env.ROLE_STAFF               || '0',
-  SENIOR_STAFF:       process.env.ROLE_SENIOR_STAFF        || '0',
-  HEAD_STAFF:         process.env.ROLE_HEAD_STAFF          || '0',
-  MANAGEMENT:         process.env.ROLE_MANAGEMENT          || '0',
-  ADMIN:              process.env.ROLE_ADMIN               || '0',
-  // Special roles
-  OWNER:              process.env.ROLE_OWNER               || '0',
-  VERIFIED:           process.env.ROLE_VERIFIED            || '0',
-};
+// Using the Railway Agent's refined ID structure for your .env
+const MODLOGS_CHANNEL = process.env.CHANNEL_STAFF_LOG || "1494273679951925248";
+const GUESS_CHANNEL_ID = process.env.CHANNEL_GUESS || "1497453944702500864";
+const SUSPENDED_ROLE_ID = process.env.ROLE_SUSPENDED || "1497462427267239936";
 
-// Staff hierarchy array (index = rank level, 0 = lowest)
-const STAFF_HIERARCHY = [
-  ROLE_IDS.TRIAL_STAFF,
-  ROLE_IDS.STAFF,
-  ROLE_IDS.SENIOR_STAFF,
-  ROLE_IDS.HEAD_STAFF,
-  ROLE_IDS.MANAGEMENT,
-  ROLE_IDS.ADMIN,
+const rankHierarchy = [
+  "1494281388092952576", "1494918304211402833", "1494919385654235276",
+  "1494919521922846790", "1494919940526964883", "1494920068667146251",
+  "1494920425346433045", "1494920607366647979", "1494920909130301490", "1494921290061053992"
 ];
 
-const STAFF_HIERARCHY_NAMES = [
-  'Trial Staff',
-  'Staff',
-  'Senior Staff',
-  'Head Staff',
-  'Management',
-  'Admin',
-];
-
-// ================= [ CHANNEL IDs ] =================
-const STAFF_LOG_CHANNEL_ID  = process.env.CHANNEL_STAFF_LOG   || '0';
-const GENERAL_CHANNEL_ID    = process.env.CHANNEL_GENERAL      || '0';
-const GUESS_CHANNEL_ID      = process.env.CHANNEL_GUESS        || '0';
-const COMMAND_CHANNEL_ID    = process.env.CHANNEL_COMMANDS     || '0';
-
-// ================= [ GAME STATE ] =================
-let currentRound      = null;
+// ================= [ STATE & HELPERS ] =================
+let currentRound = null;
 let activeGameMessage = null;
+const cooldowns = new Map();
 
-// Locations used in the guessing game
-const GAME_LOCATIONS = [
-  { name: 'spawn',       hint: 'Where every journey begins.' },
-  { name: 'market',      hint: 'Buy low, sell high.' },
-  { name: 'arena',       hint: 'Only the strong survive here.' },
-  { name: 'library',     hint: 'Knowledge is power.' },
-  { name: 'harbor',      hint: 'Ships come and go with the tide.' },
-  { name: 'castle',      hint: 'The seat of power.' },
-  { name: 'forest',      hint: 'Ancient trees whisper secrets.' },
-  { name: 'dungeon',     hint: 'Few enter, fewer leave.' },
-  { name: 'tavern',      hint: 'Stories flow as freely as the ale.' },
-  { name: 'blacksmith',  hint: 'Steel is shaped by fire and will.' },
-];
-
-// ================= [ GAME HELPERS ] =================
-function pickRandomLocation() {
-  return GAME_LOCATIONS[Math.floor(Math.random() * GAME_LOCATIONS.length)];
-}
-
-async function nextRound(channel) {
-  currentRound = pickRandomLocation();
-
-  const embed = new EmbedBuilder()
-    .setTitle('🗺️  Where Am I?')
-    .setDescription(`**Hint:** ${currentRound.hint}\n\nType the location name to win **+2 points**!`)
-    .setColor(0x5865f2)
-    .setFooter({ text: 'First correct answer wins!' });
-
-  activeGameMessage = await channel.send({ embeds: [embed] }).catch(() => null);
-}
-
-// ================= [ CLIENT INITIALIZATION ] =================
 const client = new Client({
   intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMessageReactions,
-  ],
-  partials: [Partials.Message, Partials.Channel, Partials.Reaction],
+    GatewayIntentBits.Guilds, 
+    GatewayIntentBits.GuildMembers, 
+    GatewayIntentBits.GuildMessages, 
+    GatewayIntentBits.MessageContent
+  ]
 });
 
-// ================= [ SLASH COMMAND DEFINITIONS ] =================
-const commands = [
-  new SlashCommandBuilder()
-    .setName('balance')
-    .setDescription('Check your current points and bank balance.'),
+function log(msg) {
+  const ch = client.channels.cache.get(MODLOGS_CHANNEL);
+  if (ch) ch.send(`⚖️ **Federal Audit:** ${msg}`).catch(() => {});
+}
 
-  new SlashCommandBuilder()
-    .setName('daily')
-    .setDescription('Claim your daily points reward.'),
+function getCD(id, key, time) {
+  const last = cooldowns.get(`${id}-${key}`) || 0;
+  const rem = time - (Date.now() - last);
+  return rem > 0 ? rem : 0;
+}
 
-  new SlashCommandBuilder()
-    .setName('work')
-    .setDescription('Work to earn some extra points.'),
+// ================= [ RESTORED GEOGRAPHY ENGINE ] =================
+async function nextRound(channel) {
+  if (!channel) return;
+  
+  // Cleanup old message if it exists
+  if (activeGameMessage) {
+    await activeGameMessage.delete().catch(() => {});
+    activeGameMessage = null;
+  }
 
-  new SlashCommandBuilder()
-    .setName('promote')
-    .setDescription('Promote a staff member to the next rank.')
-    .addUserOption(opt =>
-      opt.setName('user')
-        .setDescription('The staff member to promote.')
-        .setRequired(true))
-    .addStringOption(opt =>
-      opt.setName('reason')
-        .setDescription('Reason for the promotion.')
-        .setRequired(false))
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles),
+  const locations = [
+    { name: "Egypt", landmark: "The Great Pyramids of Giza", url: "https://upload.wikimedia.org/wikipedia/commons/thumb/a/af/All_Gizah_Pyramids.jpg/1200px-All_Gizah_Pyramids.jpg" },
+    { name: "Palestine", landmark: "Dome of the Rock", url: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c2/Jerusalem_Dome_of_the_rock_BW_14.JPG/1200px-Jerusalem_Dome_of_the_rock_BW_14.JPG" },
+    { name: "Morocco", landmark: "Chefchaouen (The Blue City)", url: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cf/Chefchaouen_blue_streets.jpg/1200px-Chefchaouen_blue_streets.jpg" },
+    { name: "Mexico", landmark: "Chichen Itza Pyramid", url: "https://upload.wikimedia.org/wikipedia/commons/thumb/5/51/Chichen_Itza_3.jpg/1200px-Chichen_Itza_3.jpg" },
+    { name: "France", landmark: "Eiffel Tower", url: "https://upload.wikimedia.org/wikipedia/commons/thumb/8/85/Tour_Eiffel_Wikimedia_Commons_%28cropped%29.jpg/1200px-Tour_Eiffel_Wikimedia_Commons_%28cropped%29.jpg" }
+  ];
 
-  new SlashCommandBuilder()
-    .setName('demote')
-    .setDescription('Demote a staff member to the previous rank.')
-    .addUserOption(opt =>
-      opt.setName('user')
-        .setDescription('The staff member to demote.')
-        .setRequired(true))
-    .addStringOption(opt =>
-      opt.setName('reason')
-        .setDescription('Reason for the demotion.')
-        .setRequired(false))
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles),
+  currentRound = locations[Math.floor(Math.random() * locations.length)];
 
-  new SlashCommandBuilder()
-    .setName('terminate')
-    .setDescription('Remove all staff roles from a member.')
-    .addUserOption(opt =>
-      opt.setName('user')
-        .setDescription('The staff member to terminate.')
-        .setRequired(true))
-    .addStringOption(opt =>
-      opt.setName('reason')
-        .setDescription('Reason for the termination.')
-        .setRequired(false))
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles),
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("hint").setLabel("Hint").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("skip").setLabel("Skip").setStyle(ButtonStyle.Danger)
+  );
 
-  new SlashCommandBuilder()
-    .setName('punish')
-    .setDescription('Deduct points from a member as a punishment.')
-    .addUserOption(opt =>
-      opt.setName('user')
-        .setDescription('The member to punish.')
-        .setRequired(true))
-    .addIntegerOption(opt =>
-      opt.setName('amount')
-        .setDescription('Number of points to deduct.')
-        .setRequired(true)
-        .setMinValue(1))
-    .addStringOption(opt =>
-      opt.setName('reason')
-        .setDescription('Reason for the punishment.')
-        .setRequired(false))
-    .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
+  const embed = new EmbedBuilder()
+    .setTitle("🌍 Geography Quiz")
+    .setDescription("Which **Country** is this landmark located in?")
+    .setImage(currentRound.url)
+    .setColor(0x3498DB)
+    .setFooter({ text: "Type the country name to win points!" });
 
-  new SlashCommandBuilder()
-    .setName('reward')
-    .setDescription('Award bonus points to a member.')
-    .addUserOption(opt =>
-      opt.setName('user')
-        .setDescription('The member to reward.')
-        .setRequired(true))
-    .addIntegerOption(opt =>
-      opt.setName('amount')
-        .setDescription('Number of points to award.')
-        .setRequired(true)
-        .setMinValue(1))
-    .addStringOption(opt =>
-      opt.setName('reason')
-        .setDescription('Reason for the reward.')
-        .setRequired(false))
-    .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
+  activeGameMessage = await channel.send({ embeds: [embed], components: [row] }).catch(console.error);
+}
 
-  new SlashCommandBuilder()
-    .setName('leaderboard')
-    .setDescription('View the top points earners in the server.'),
-
-  new SlashCommandBuilder()
-    .setName('deposit')
-    .setDescription('Deposit points into your bank.')
-    .addIntegerOption(opt =>
-      opt.setName('amount')
-        .setDescription('Amount of points to deposit.')
-        .setRequired(true)
-        .setMinValue(1)),
-
-  new SlashCommandBuilder()
-    .setName('withdraw')
-    .setDescription('Withdraw points from your bank.')
-    .addIntegerOption(opt =>
-      opt.setName('amount')
-        .setDescription('Amount of points to withdraw.')
-        .setRequired(true)
-        .setMinValue(1)),
-].map(cmd => cmd.toJSON());
-
-// ================= [ READY EVENT ] =================
+// ================= [ INITIALIZATION ] =================
 client.once(Events.ClientReady, async () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
+  console.log(`✅ ${client.user.tag} Online. Landmarks Restored.`);
 
-  // Register slash commands with Discord
-  const rest = new REST({ version: '10' }).setToken(TOKEN);
+  const rest = new REST({ version: "10" }).setToken(TOKEN);
+  const commands = [
+    new SlashCommandBuilder().setName("promote").setDescription("Promote staff member").addUserOption(o => o.setName("target").setRequired(true)).addStringOption(o => o.setName("ranks").setRequired(true).addChoices({name:'1 Rank', value:'1'}, {name:'2 Ranks', value:'2'})).setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles),
+    new SlashCommandBuilder().setName("punish").setDescription("Executive punishment").addUserOption(o => o.setName("target").setRequired(true)).addStringOption(o => o.setName("type").setRequired(true).addChoices({name:'Timeout', value:'T'}, {name:'Suspension', value:'S'})).addStringOption(o => o.setName("reason").setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
+    new SlashCommandBuilder().setName("daily").setDescription("Claim 5 daily points"),
+    new SlashCommandBuilder().setName("work").setDescription("Earn 3 points (30m CD)"),
+    new SlashCommandBuilder().setName("balance").setDescription("Check your points")
+  ].map(c => c.toJSON());
+
   try {
-    console.log('🔄 Registering slash commands...');
-    await rest.put(
-      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-      { body: commands }
-    );
-    console.log('✅ Slash commands registered.');
-  } catch (err) {
-    console.error('❌ Failed to register slash commands:', err);
+    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+    const ch = await client.channels.fetch(GUESS_CHANNEL_ID).catch(() => null);
+    if (ch) nextRound(ch);
+  } catch (err) { console.error("Sync Error:", err); }
+});
+
+// ================= [ INTERACTION HANDLER ] =================
+client.on(Events.InteractionCreate, async (itx) => {
+  if (!itx.guild || !itx.member) return;
+  const { commandName, options, user, member, customId } = itx;
+
+  // --- BUTTONS ---
+  if (itx.isButton()) {
+    if (customId === "hint") return itx.reply({ content: `Hint: It's the home of **${currentRound?.landmark}**`, ephemeral: true });
+    if (customId === "skip") {
+      const cd = getCD(user.id, "skip", 60000);
+      if (cd) return itx.reply({ content: `⏳ Wait ${Math.ceil(cd/1000)}s.`, ephemeral: true });
+      cooldowns.set(`${user.id}-skip`, Date.now());
+      await itx.reply(`🚩 Skipped! It was **${currentRound?.name}**.`);
+      return nextRound(itx.channel);
+    }
   }
 
-  // Start the guessing game in the designated channel
-  const guessChannel = await client.channels.fetch(GUESS_CHANNEL_ID).catch(() => null);
-  if (guessChannel) {
-    nextRound(guessChannel);
+  if (!itx.isChatInputCommand()) return;
+
+  // Economy & Admin Commands
+  if (commandName === "promote") {
+    const target = options.getMember("target");
+    const step = parseInt(options.getString("ranks"));
+    const currentIdx = rankHierarchy.findLastIndex(r => target.roles.cache.has(r));
+    const newIdx = Math.min(rankHierarchy.length - 1, (currentIdx === -1 ? 0 : currentIdx) + step);
+
+    await target.roles.remove(rankHierarchy.filter(r => target.roles.cache.has(r))).catch(() => {});
+    await target.roles.add(rankHierarchy[newIdx]).catch(() => {});
+    log(`📈 Promotion: <@${target.id}> advanced.`);
+    return itx.reply(`✅ <@${target.id}> promoted.`);
+  }
+
+  if (commandName === "punish") {
+    const target = options.getMember("target");
+    const type = options.getString("type");
+    if (type === "T") await target.timeout(ms("1h"), options.getString("reason"));
+    else {
+      db.saveRoles(target.id, target.roles.cache.map(r => r.id));
+      await target.roles.set([SUSPENDED_ROLE_ID]);
+    }
+    return itx.reply("Sentence executed.");
+  }
+
+  if (commandName === "daily") {
+    const last = db.getLastDaily(user.id);
+    if (Date.now() - last < 86400000) return itx.reply({ content: "Already claimed.", ephemeral: true });
+    db.addPoints(user.id, 5);
+    db.setLastDaily(user.id, Date.now());
+    return itx.reply("💰 +5 Points.");
+  }
+
+  if (commandName === "balance") {
+    return itx.reply({ content: `🏦 Vault: **${db.getPoints(user.id)}** pts.`, ephemeral: true });
   }
 });
 
-// ================= [ SLASH COMMAND HANDLER ] =================
-client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-
-  const { commandName } = interaction;
-
-  // ── balance ──────────────────────────────────────────────
-  if (commandName === 'balance') {
-    const points = db.getPoints(interaction.user.id);
-    const bank   = db.getBank(interaction.user.id);
-    const embed  = new EmbedBuilder()
-      .setTitle(`💰 Balance — ${interaction.user.username}`)
-      .addFields(
-        { name: 'Wallet', value: `${points} pts`, inline: true },
-        { name: 'Bank',   value: `${bank} pts`,   inline: true },
-      )
-      .setColor(0x57f287);
-    return interaction.reply({ embeds: [embed], ephemeral: true });
-  }
-
-  // ── daily ─────────────────────────────────────────────────
-  if (commandName === 'daily') {
-    const now       = Date.now();
-    const lastDaily = db.getLastDaily(interaction.user.id);
-    const cooldown  = 20 * 60 * 60 * 1000; // 20 hours
-
-    if (now - lastDaily < cooldown) {
-      const remaining = cooldown - (now - lastDaily);
-      return interaction.reply({
-        content: `⏳ You already claimed your daily reward. Come back in **${ms(remaining, { long: true })}**.`,
-        ephemeral: true,
-      });
-    }
-
-    const reward = 50;
-    db.addPoints(interaction.user.id, reward);
-    db.setLastDaily(interaction.user.id, now);
-
-    return interaction.reply({
-      content: `✅ You claimed your daily **${reward} points**! Come back tomorrow.`,
-      ephemeral: true,
-    });
-  }
-
-  // ── work ──────────────────────────────────────────────────
-  if (commandName === 'work') {
-    const earned = Math.floor(Math.random() * 20) + 5; // 5–24 pts
-    db.addPoints(interaction.user.id, earned);
-
-    const responses = [
-      `🔨 You fixed some bugs and earned **${earned} points**.`,
-      `📦 You delivered packages and earned **${earned} points**.`,
-      `🌾 You harvested crops and earned **${earned} points**.`,
-      `🛡️ You patrolled the server and earned **${earned} points**.`,
-      `📝 You filed reports and earned **${earned} points**.`,
-    ];
-    return interaction.reply({
-      content: responses[Math.floor(Math.random() * responses.length)],
-      ephemeral: true,
-    });
-  }
-
-  // ── promote ───────────────────────────────────────────────
-  if (commandName === 'promote') {
-    const target = interaction.options.getMember('user');
-    const reason = interaction.options.getString('reason') || 'No reason provided.';
-
-    if (!target) return interaction.reply({ content: '❌ Member not found.', ephemeral: true });
-
-    const currentRankIndex = STAFF_HIERARCHY.findLastIndex(roleId =>
-      target.roles.cache.has(roleId)
-    );
-
-    if (currentRankIndex === -1) {
-      // Not yet staff — give Trial Staff
-      await target.roles.add(ROLE_IDS.TRIAL_STAFF).catch(() => {});
-      const logChannel = client.channels.cache.get(STAFF_LOG_CHANNEL_ID);
-      logChannel?.send(`📋 **Promotion** | ${target} has been given **Trial Staff** by ${interaction.user}.\n**Reason:** ${reason}`);
-      return interaction.reply({ content: `✅ ${target} has been promoted to **Trial Staff**.`, ephemeral: true });
-    }
-
-    if (currentRankIndex >= STAFF_HIERARCHY.length - 1) {
-      return interaction.reply({ content: '❌ This member is already at the highest rank.', ephemeral: true });
-    }
-
-    const newRoleId  = STAFF_HIERARCHY[currentRankIndex + 1];
-    const newRoleName = STAFF_HIERARCHY_NAMES[currentRankIndex + 1];
-    await target.roles.remove(STAFF_HIERARCHY[currentRankIndex]).catch(() => {});
-    await target.roles.add(newRoleId).catch(() => {});
-
-    const logChannel = client.channels.cache.get(STAFF_LOG_CHANNEL_ID);
-    logChannel?.send(`📋 **Promotion** | ${target} has been promoted to **${newRoleName}** by ${interaction.user}.\n**Reason:** ${reason}`);
-    return interaction.reply({ content: `✅ ${target} has been promoted to **${newRoleName}**.`, ephemeral: true });
-  }
-
-  // ── demote ────────────────────────────────────────────────
-  if (commandName === 'demote') {
-    const target = interaction.options.getMember('user');
-    const reason = interaction.options.getString('reason') || 'No reason provided.';
-
-    if (!target) return interaction.reply({ content: '❌ Member not found.', ephemeral: true });
-
-    const currentRankIndex = STAFF_HIERARCHY.findLastIndex(roleId =>
-      target.roles.cache.has(roleId)
-    );
-
-    if (currentRankIndex <= 0) {
-      return interaction.reply({ content: '❌ This member cannot be demoted further.', ephemeral: true });
-    }
-
-    const newRoleId   = STAFF_HIERARCHY[currentRankIndex - 1];
-    const newRoleName = STAFF_HIERARCHY_NAMES[currentRankIndex - 1];
-    await target.roles.remove(STAFF_HIERARCHY[currentRankIndex]).catch(() => {});
-    await target.roles.add(newRoleId).catch(() => {});
-
-    const logChannel = client.channels.cache.get(STAFF_LOG_CHANNEL_ID);
-    logChannel?.send(`📋 **Demotion** | ${target} has been demoted to **${newRoleName}** by ${interaction.user}.\n**Reason:** ${reason}`);
-    return interaction.reply({ content: `✅ ${target} has been demoted to **${newRoleName}**.`, ephemeral: true });
-  }
-
-  // ── terminate ─────────────────────────────────────────────
-  if (commandName === 'terminate') {
-    const target = interaction.options.getMember('user');
-    const reason = interaction.options.getString('reason') || 'No reason provided.';
-
-    if (!target) return interaction.reply({ content: '❌ Member not found.', ephemeral: true });
-
-    const staffRolesHeld = STAFF_HIERARCHY.filter(roleId => target.roles.cache.has(roleId));
-    if (staffRolesHeld.length === 0) {
-      return interaction.reply({ content: '❌ This member holds no staff roles.', ephemeral: true });
-    }
-
-    // Save roles before removing them
-    db.saveRoles(target.id, staffRolesHeld);
-    await target.roles.remove(staffRolesHeld).catch(() => {});
-
-    const logChannel = client.channels.cache.get(STAFF_LOG_CHANNEL_ID);
-    logChannel?.send(`📋 **Termination** | ${target} has been terminated by ${interaction.user}.\n**Reason:** ${reason}`);
-    return interaction.reply({ content: `✅ ${target} has been terminated from all staff positions.`, ephemeral: true });
-  }
-
-  // ── punish ────────────────────────────────────────────────
-  if (commandName === 'punish') {
-    const target = interaction.options.getMember('user');
-    const amount = interaction.options.getInteger('amount');
-    const reason = interaction.options.getString('reason') || 'No reason provided.';
-
-    if (!target) return interaction.reply({ content: '❌ Member not found.', ephemeral: true });
-
-    const currentPoints = db.getPoints(target.id);
-    const deduct        = Math.min(amount, currentPoints);
-    if (deduct > 0) db.removePoints(target.id, deduct);
-
-    const logChannel = client.channels.cache.get(STAFF_LOG_CHANNEL_ID);
-    logChannel?.send(`⚠️ **Punishment** | ${target} lost **${deduct} points** (requested: ${amount}) by ${interaction.user}.\n**Reason:** ${reason}`);
-    return interaction.reply({
-      content: `✅ Deducted **${deduct} points** from ${target}. They now have **${currentPoints - deduct} points**.`,
-      ephemeral: true,
-    });
-  }
-
-  // ── reward ────────────────────────────────────────────────
-  if (commandName === 'reward') {
-    const target = interaction.options.getMember('user');
-    const amount = interaction.options.getInteger('amount');
-    const reason = interaction.options.getString('reason') || 'No reason provided.';
-
-    if (!target) return interaction.reply({ content: '❌ Member not found.', ephemeral: true });
-
-    db.addPoints(target.id, amount);
-    const newTotal = db.getPoints(target.id);
-
-    const logChannel = client.channels.cache.get(STAFF_LOG_CHANNEL_ID);
-    logChannel?.send(`🎁 **Reward** | ${target} received **${amount} points** from ${interaction.user}.\n**Reason:** ${reason}`);
-    return interaction.reply({
-      content: `✅ Awarded **${amount} points** to ${target}. They now have **${newTotal} points**.`,
-      ephemeral: true,
-    });
-  }
-
-  // ── deposit ───────────────────────────────────────────────
-  if (commandName === 'deposit') {
-    const amount  = interaction.options.getInteger('amount');
-    const wallet  = db.getPoints(interaction.user.id);
-
-    if (wallet < amount) {
-      return interaction.reply({ content: `❌ You only have **${wallet} points** in your wallet.`, ephemeral: true });
-    }
-
-    db.removePoints(interaction.user.id, amount);
-    db.addBank(interaction.user.id, amount);
-    return interaction.reply({ content: `✅ Deposited **${amount} points** into your bank.`, ephemeral: true });
-  }
-
-  // ── withdraw ──────────────────────────────────────────────
-  if (commandName === 'withdraw') {
-    const amount = interaction.options.getInteger('amount');
-    const bank   = db.getBank(interaction.user.id);
-
-    if (bank < amount) {
-      return interaction.reply({ content: `❌ You only have **${bank} points** in your bank.`, ephemeral: true });
-    }
-
-    db.addPoints(interaction.user.id, amount);
-    // addBank supports negative values since it uses += under the hood
-    db.addBank(interaction.user.id, -amount);
-    return interaction.reply({ content: `✅ Withdrew **${amount} points** from your bank to your wallet.`, ephemeral: true });
-  }
-
-  // ── leaderboard ───────────────────────────────────────────
-  if (commandName === 'leaderboard') {
-    // db.js doesn't expose a leaderboard query, so we note it as coming soon
-    return interaction.reply({
-      content: '🏆 Leaderboard coming soon!',
-      ephemeral: true,
-    });
-  }
-});
-
-// ================= [ MESSAGE GAME LOGIC ] =================
+// ================= [ MESSAGE GAME & CLEANUP ] =================
 client.on(Events.MessageCreate, async (msg) => {
-  // Only monitor the specific guess channel and ignore other bots
   if (msg.author.bot || msg.channel.id !== GUESS_CHANNEL_ID) return;
 
-  // If there is no active round, just clean up the "nonsense" chat
-  if (!currentRound) {
-    return msg.delete().catch(() => {});
-  }
+  if (!currentRound) return msg.delete().catch(() => {});
 
-  const userGuess    = msg.content.toLowerCase().trim();
+  const userGuess = msg.content.toLowerCase().trim();
   const correctAnswer = currentRound.name.toLowerCase();
 
-  // --- CASE 1: CORRECT ANSWER ---
   if (userGuess === correctAnswer) {
-    currentRound = null; // Lock round immediately to prevent double-wins
-
-    await msg.react('✅').catch(() => {});
+    currentRound = null; 
+    await msg.react("✅").catch(() => {});
     db.addPoints(msg.author.id, 2);
-
-    const successMsg = await msg.reply(`🌟 Correct! **${msg.author.username}** identified the location. +2 Points.`);
+    const successMsg = await msg.reply(`🌟 Correct! **${msg.author.username}** identified the location.`);
 
     setTimeout(async () => {
-      try {
-        await msg.delete().catch(() => {});
-        await successMsg.delete().catch(() => {});
-        if (activeGameMessage) {
-          await activeGameMessage.delete().catch(() => {});
-          activeGameMessage = null;
-        }
-        nextRound(msg.channel);
-      } catch (err) {
-        console.log('Cleanup error (likely message already deleted):', err.message);
-      }
+      await msg.delete().catch(() => {});
+      await successMsg.delete().catch(() => {});
+      if (activeGameMessage) await activeGameMessage.delete().catch(() => {});
+      nextRound(msg.channel);
     }, 2500);
-    return;
-  }
-
-  // --- CASE 2: INCORRECT / NONSENSE ---
-  // If they reached this point, the answer was wrong.
-  try {
-    await msg.react('❌');
-    // Short delay so they see the X before the message vanishes
-    setTimeout(() => {
-      msg.delete().catch(() => {});
-    }, 800);
-  } catch (err) {
-    msg.delete().catch(() => {});
+  } else {
+    // Incorrect guess logic: React and Delete
+    try {
+      await msg.react("❌");
+      setTimeout(() => msg.delete().catch(() => {}), 1000);
+    } catch (e) { msg.delete().catch(() => {}); }
   }
 });
 
-// ================= [ LOGIN ] =================
 client.login(TOKEN);
