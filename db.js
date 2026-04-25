@@ -1,46 +1,95 @@
-const Database = require('better-sqlite3');
-const path = require('path');
+"use strict";
 
-const db = new Database(path.join(__dirname, 'republic.db'));
+const path = require("path");
+const Database = require("better-sqlite3");
 
-// Initialize Database Schema
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    points INTEGER DEFAULT 0,
-    bank INTEGER DEFAULT 0,
-    lastDaily INTEGER DEFAULT 0,
-    savedRoles TEXT DEFAULT '[]'
-  )
-`).run();
+// On Railway, mount a Volume at /data and the DB will persist across deploys.
+// Locally (or without a volume), it falls back to a file next to db.js.
+const DB_PATH = process.env.DB_PATH
+  || (require("fs").existsSync("/data") ? "/data/bot.sqlite" : path.join(__dirname, "bot.sqlite"));
 
-module.exports = {
-  getPoints: (uid) => db.prepare('SELECT points FROM users WHERE id = ?').get(uid)?.points || 0,
-  
-  addPoints: (uid, amt) => {
-    db.prepare(`INSERT INTO users (id, points) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET points = points + ?`).run(uid, amt, amt);
-  },
+const db = new Database(DB_PATH);
+db.pragma("journal_mode = WAL");
+db.pragma("foreign_keys = ON");
 
-  removePoints: (uid, amt) => {
-    db.prepare('UPDATE users SET points = points - ? WHERE id = ?').run(amt, uid);
-  },
+// ----- Schema -----
+db.exec(`
+  CREATE TABLE IF NOT EXISTS cooldowns (
+    user_id   TEXT PRIMARY KEY,
+    expires   INTEGER NOT NULL
+  );
 
-  getBank: (uid) => db.prepare('SELECT bank FROM users WHERE id = ?').get(uid)?.bank || 0,
+  CREATE TABLE IF NOT EXISTS points (
+    user_id   TEXT PRIMARY KEY,
+    points    INTEGER NOT NULL DEFAULT 0
+  );
 
-  addBank: (uid, amt) => {
-    db.prepare(`INSERT INTO users (id, bank) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET bank = bank + ?`).run(uid, amt, amt);
-  },
+  CREATE TABLE IF NOT EXISTS punishments (
+    case_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_id TEXT    NOT NULL,
+    type      TEXT    NOT NULL,
+    reason    TEXT    NOT NULL,
+    evidence  TEXT    NOT NULL,
+    issuer_id TEXT    NOT NULL,
+    ts        INTEGER NOT NULL
+  );
 
-  getLastDaily: (uid) => db.prepare('SELECT lastDaily FROM users WHERE id = ?').get(uid)?.lastDaily || 0,
+  CREATE INDEX IF NOT EXISTS idx_points_desc   ON points (points DESC);
+  CREATE INDEX IF NOT EXISTS idx_punish_target ON punishments (target_id);
+`);
 
-  setLastDaily: (uid, ts) => {
-    db.prepare(`INSERT INTO users (id, lastDaily) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET lastDaily = ?`).run(uid, ts, ts);
-  },
+// ----- Prepared statements (compiled once) -----
+const stmts = {
+  getCooldown:  db.prepare("SELECT expires FROM cooldowns WHERE user_id = ?"),
+  setCooldown:  db.prepare(`
+    INSERT INTO cooldowns (user_id, expires) VALUES (?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET expires = excluded.expires
+  `),
 
-  saveRoles: (uid, roles) => {
-    const data = JSON.stringify(roles);
-    db.prepare(`INSERT INTO users (id, savedRoles) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET savedRoles = ?`).run(uid, data, data);
-  },
+  getPoints:    db.prepare("SELECT points FROM points WHERE user_id = ?"),
+  upsertPoints: db.prepare(`
+    INSERT INTO points (user_id, points) VALUES (?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET points = points.points + excluded.points
+  `),
+  getPointsRow: db.prepare("SELECT points FROM points WHERE user_id = ?"),
+  topPoints:    db.prepare(`
+    SELECT user_id AS userId, points FROM points
+    ORDER BY points DESC, user_id ASC
+    LIMIT ?
+  `),
 
-  getRoles: (uid) => JSON.parse(db.prepare('SELECT savedRoles FROM users WHERE id = ?').get(uid)?.savedRoles || '[]')
+  insertPunish: db.prepare(`
+    INSERT INTO punishments (target_id, type, reason, evidence, issuer_id, ts)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `),
 };
+
+// ----- Cooldowns -----
+function getCooldown(userId) {
+  const row = stmts.getCooldown.get(userId);
+  return row ? row.expires : null;
+}
+function setCooldown(userId, timestampMs) {
+  stmts.setCooldown.run(userId, Number(timestampMs));
+}
+
+// ----- Punishments -----
+function addPunishment(targetId, type, reason, evidence, issuerId) {
+  const info = stmts.insertPunish.run(targetId, type, reason, evidence, issuerId, Date.now());
+  return Number(info.lastInsertRowid);
+}
+
+// ----- Points / Economy -----
+function getPoints(userId) {
+  const row = stmts.getPoints.get(userId);
+  return row ? row.points : 0;
+}
+function addPoints(userId, amount) {
+  stmts.upsertPoints.run(userId, Number(amount));
+  return stmts.getPointsRow.get(userId).points;
+}
+function getTopPoints(limit = 10) {
+  return stmts.topPoints.all(limit);
+}
+
+// Cl
