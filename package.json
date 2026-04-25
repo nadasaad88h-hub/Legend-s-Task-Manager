@@ -1,19 +1,19 @@
 {
-  "name": "lagging-legends-admin",
+  "name": "ll-government-bot",
   "version": "1.0.0",
-  "description": "Professional Promotion & Cooldown System",
+  "description": "Federal Government System for Lagging Legends",
   "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
+  "engines": {
+    "node": ">=18.0.0"
   },
   "dependencies": {
     "discord.js": "^14.14.1",
     "@discordjs/rest": "^2.2.0",
-    "discord-api-types": "^0.37.67",
-    "better-sqlite3": "^9.4.3",
+    "better-sqlite3": "^11.0.0",
+    "ms": "^2.1.3",
     "dotenv": "^16.4.5"
   },
-  "engines": {
-    "node": ">=18.0.0"
+  "scripts": {
+    "start": "node index.js"
   }
 }
