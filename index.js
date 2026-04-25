@@ -1,5 +1,7 @@
 "use strict";
 
+require("dotenv").config();
+
 const {
   Client,
   GatewayIntentBits,
@@ -67,8 +69,48 @@ const GAMES_CHANNEL_ID = "1497454650880950322";
 const GAME_COLOR = 0xffd700;
 
 const placeDatabase = [
-  { name: "Morocco", url: "https://your-link.com/morocco.jpg" },
-  { name: "USA", url: "https://your-link.com/usa.jpg" },
+  { name: "Morocco",              url: "https://flagcdn.com/w1280/ma.png" },
+  { name: "USA",                  url: "https://flagcdn.com/w1280/us.png" },
+  { name: "Canada",               url: "https://flagcdn.com/w1280/ca.png" },
+  { name: "Mexico",               url: "https://flagcdn.com/w1280/mx.png" },
+  { name: "Brazil",               url: "https://flagcdn.com/w1280/br.png" },
+  { name: "Argentina",            url: "https://flagcdn.com/w1280/ar.png" },
+  { name: "Chile",                url: "https://flagcdn.com/w1280/cl.png" },
+  { name: "Colombia",             url: "https://flagcdn.com/w1280/co.png" },
+  { name: "Peru",                 url: "https://flagcdn.com/w1280/pe.png" },
+  { name: "France",               url: "https://flagcdn.com/w1280/fr.png" },
+  { name: "Germany",              url: "https://flagcdn.com/w1280/de.png" },
+  { name: "Spain",                url: "https://flagcdn.com/w1280/es.png" },
+  { name: "Portugal",             url: "https://flagcdn.com/w1280/pt.png" },
+  { name: "Italy",                url: "https://flagcdn.com/w1280/it.png" },
+  { name: "Greece",               url: "https://flagcdn.com/w1280/gr.png" },
+  { name: "Netherlands",          url: "https://flagcdn.com/w1280/nl.png" },
+  { name: "Belgium",              url: "https://flagcdn.com/w1280/be.png" },
+  { name: "Switzerland",          url: "https://flagcdn.com/w1280/ch.png" },
+  { name: "Ireland",              url: "https://flagcdn.com/w1280/ie.png" },
+  { name: "Poland",               url: "https://flagcdn.com/w1280/pl.png" },
+  { name: "Sweden",               url: "https://flagcdn.com/w1280/se.png" },
+  { name: "Norway",               url: "https://flagcdn.com/w1280/no.png" },
+  { name: "Finland",              url: "https://flagcdn.com/w1280/fi.png" },
+  { name: "Denmark",              url: "https://flagcdn.com/w1280/dk.png" },
+  { name: "Russia",               url: "https://flagcdn.com/w1280/ru.png" },
+  { name: "Ukraine",              url: "https://flagcdn.com/w1280/ua.png" },
+  { name: "Turkey",               url: "https://flagcdn.com/w1280/tr.png" },
+  { name: "Egypt",                url: "https://flagcdn.com/w1280/eg.png" },
+  { name: "Saudi Arabia",         url: "https://flagcdn.com/w1280/sa.png" },
+  { name: "United Arab Emirates", url: "https://flagcdn.com/w1280/ae.png" },
+  { name: "Nigeria",              url: "https://flagcdn.com/w1280/ng.png" },
+  { name: "Kenya",                url: "https://flagcdn.com/w1280/ke.png" },
+  { name: "South Africa",         url: "https://flagcdn.com/w1280/za.png" },
+  { name: "India",                url: "https://flagcdn.com/w1280/in.png" },
+  { name: "China",                url: "https://flagcdn.com/w1280/cn.png" },
+  { name: "Japan",                url: "https://flagcdn.com/w1280/jp.png" },
+  { name: "South Korea",          url: "https://flagcdn.com/w1280/kr.png" },
+  { name: "Thailand",             url: "https://flagcdn.com/w1280/th.png" },
+  { name: "Vietnam",              url: "https://flagcdn.com/w1280/vn.png" },
+  { name: "Indonesia",            url: "https://flagcdn.com/w1280/id.png" },
+  { name: "Australia",            url: "https://flagcdn.com/w1280/au.png" },
+  { name: "New Zealand",          url: "https://flagcdn.com/w1280/nz.png" },
 ];
 
 let currentCountry = "Morocco";
