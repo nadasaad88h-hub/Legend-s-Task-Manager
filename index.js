@@ -21,7 +21,6 @@ const VERIFIED_ROLE_ID = "1494237255148371998";
 const VERIFY_ADMIN_ROLE = "1494274846912417812";
 const HIGH_STAFF_ROLE = "1494278992402972733";
 const PUNISH_ACCESS_ROLES = ["1494276990700753018", "1494277529614159893", "1494284826747076619"];
-const BAN_ONLY_ROLE = "1494284826747076619";
 const BYPASS_SELF_ROLE = "1494274846912417812";
 
 const MILESTONE_ROLE_1 = "1494921889313984552";
@@ -64,21 +63,25 @@ let hintMsgId = null;
 let skipCooldowns = new Map();
 
 async function startNextRound(channel) {
-    if (!channel) return;
+    if (!channel) return console.log("❌ Error: Channel not found for startNextRound.");
     engineStatus = "LOCKED";
+    
     const data = placeDatabase[Math.floor(Math.random() * placeDatabase.length)];
     currentCountry = data.name;
     hintUsed = false;
 
-    if (hintMsgId) {
-        const hMsg = await channel.messages.fetch(hintMsgId).catch(() => null);
-        if (hMsg?.deletable) await hMsg.delete().catch(() => {});
-        hintMsgId = null;
-    }
-    if (lastGameMsgId) {
-        const old = await channel.messages.fetch(lastGameMsgId).catch(() => null);
-        if (old?.deletable) await old.delete().catch(() => {});
-    }
+    // Clean up old messages
+    try {
+        if (hintMsgId) {
+            const hMsg = await channel.messages.fetch(hintMsgId).catch(() => null);
+            if (hMsg?.deletable) await hMsg.delete().catch(() => {});
+            hintMsgId = null;
+        }
+        if (lastGameMsgId) {
+            const old = await channel.messages.fetch(lastGameMsgId).catch(() => null);
+            if (old?.deletable) await old.delete().catch(() => {});
+        }
+    } catch (err) { console.log("Cleanup Error: " + err); }
 
     const embed = new EmbedBuilder()
         .setTitle("🌍 Guess the Place!")
@@ -100,8 +103,8 @@ async function startNextRound(channel) {
 client.on(Events.InteractionCreate, async (itx) => {
     const { commandName, options, member, user, guild, customId } = itx;
 
-    // --- BUTTONS ---
     if (itx.isButton()) {
+        // --- VERIFY BUTTON ---
         if (customId === "verify_btn") {
             if (member.roles.cache.has(VERIFIED_ROLE_ID)) return itx.reply({ content: "ℹ️ You are already verified!", ephemeral: true });
             const ageMs = Date.now() - user.createdTimestamp;
@@ -116,6 +119,7 @@ client.on(Events.InteractionCreate, async (itx) => {
             return;
         }
 
+        // --- HINT BUTTON ---
         if (customId === "reveal_letter" && engineStatus === "ACTIVE") {
             if (hintUsed) return itx.deferUpdate();
             hintUsed = true;
@@ -134,6 +138,7 @@ client.on(Events.InteractionCreate, async (itx) => {
             return;
         }
 
+        // --- SKIP BUTTON ---
         if (customId === "skip_flag" && engineStatus === "ACTIVE") {
             const now = Date.now();
             const userSkips = skipCooldowns.get(user.id) || [];
@@ -224,17 +229,27 @@ client.on(Events.MessageCreate, async (msg) => {
             const hMsg = await msg.channel.messages.fetch(hintMsgId).catch(() => null);
             if (hMsg?.deletable) hMsg.delete().catch(() => {});
         }
-        setTimeout(() => { if (msg.deletable) msg.delete(); startNextRound(msg.channel); }, 2000);
+        setTimeout(() => { if (msg.deletable) msg.delete().catch(() => {}); startNextRound(msg.channel); }, 2000);
     } else if (msg.content.length > 2) {
         await msg.react("❌");
-        setTimeout(() => { if (msg.deletable) msg.delete(); }, 1500);
+        setTimeout(() => { if (msg.deletable) msg.delete().catch(() => {}); }, 1500);
     }
 });
 
+// ================= [ STARTUP ENGINE ] =================
 client.once(Events.ClientReady, async () => {
-    console.log("🚀 LAGGING LEGENDS ONLINE");
-    const chan = await client.channels.fetch(GUESS_CHANNEL_ID);
-    if (chan) startNextRound(chan);
+    console.log(`🚀 LAGGING LEGENDS ONLINE | Logged in as ${client.user.tag}`);
+    
+    // Slight delay to ensure channel availability
+    setTimeout(async () => {
+        const chan = await client.channels.fetch(GUESS_CHANNEL_ID).catch(() => null);
+        if (chan) {
+            console.log("🌍 Guessing Engine Initialized.");
+            startNextRound(chan);
+        } else {
+            console.log("❌ Startup Error: Could not find Guessing Channel.");
+        }
+    }, 3000);
 });
 
 client.login(DISCORD_TOKEN);
