@@ -1,19 +1,13 @@
 {
   "name": "ll-discord-bot",
-  "version": "1.0.0",
-  "private": true,
-  "description": "Lagging Legends Discord bot — promotion, punishment, verification, and points game.",
+  "version": "18.0.0",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "node --watch index.js"
-  },
-  "engines": {
-    "node": ">=20"
+    "start": "node index.js"
   },
   "dependencies": {
-    "@discordjs/rest": "^2.4.0",
-    "better-sqlite3": "^11.5.0",
+    "@discordjs/rest": "^2.3.0",
+    "better-sqlite3": "^11.0.0",
     "discord.js": "^14.16.3",
     "dotenv": "^16.4.5",
     "ms": "^2.1.3"
