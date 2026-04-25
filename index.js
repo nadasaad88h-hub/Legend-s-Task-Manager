@@ -4,7 +4,7 @@ require('dotenv').config();
 const { 
     Client, GatewayIntentBits, SlashCommandBuilder, Routes, 
     Events, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
-    PermissionFlagsBits, REST, Partials
+    PermissionFlagsBits, REST 
 } = require("discord.js");
 const ms = require("ms");
 const db = require("./db");
@@ -12,7 +12,6 @@ const db = require("./db");
 // ================= [ CONFIGURATION ] =================
 const { TOKEN, CLIENT_ID, GUILD_ID } = process.env;
 
-// Using the Railway Agent's refined ID structure for your .env
 const MODLOGS_CHANNEL = process.env.CHANNEL_STAFF_LOG || "1494273679951925248";
 const GUESS_CHANNEL_ID = process.env.CHANNEL_GUESS || "1497453944702500864";
 const SUSPENDED_ROLE_ID = process.env.ROLE_SUSPENDED || "1497462427267239936";
@@ -48,11 +47,10 @@ function getCD(id, key, time) {
   return rem > 0 ? rem : 0;
 }
 
-// ================= [ RESTORED GEOGRAPHY ENGINE ] =================
+// ================= [ GEOGRAPHY ENGINE ] =================
 async function nextRound(channel) {
   if (!channel) return;
   
-  // Cleanup old message if it exists
   if (activeGameMessage) {
     await activeGameMessage.delete().catch(() => {});
     activeGameMessage = null;
@@ -75,7 +73,7 @@ async function nextRound(channel) {
 
   const embed = new EmbedBuilder()
     .setTitle("🌍 Geography Quiz")
-    .setDescription("Which **Country** is this landmark located in?")
+    .setDescription("Identify the **Country** where this landmark is located!")
     .setImage(currentRound.url)
     .setColor(0x3498DB)
     .setFooter({ text: "Type the country name to win points!" });
@@ -85,15 +83,28 @@ async function nextRound(channel) {
 
 // ================= [ INITIALIZATION ] =================
 client.once(Events.ClientReady, async () => {
-  console.log(`✅ ${client.user.tag} Online. Landmarks Restored.`);
+  console.log(`✅ ${client.user.tag} Online. Protocol: Landmark Engine.`);
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
   const commands = [
-    new SlashCommandBuilder().setName("promote").setDescription("Promote staff member").addUserOption(o => o.setName("target").setRequired(true)).addStringOption(o => o.setName("ranks").setRequired(true).addChoices({name:'1 Rank', value:'1'}, {name:'2 Ranks', value:'2'})).setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles),
-    new SlashCommandBuilder().setName("punish").setDescription("Executive punishment").addUserOption(o => o.setName("target").setRequired(true)).addStringOption(o => o.setName("type").setRequired(true).addChoices({name:'Timeout', value:'T'}, {name:'Suspension', value:'S'})).addStringOption(o => o.setName("reason").setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
+    new SlashCommandBuilder()
+      .setName("promote")
+      .setDescription("Promote staff member")
+      .addUserOption(o => o.setName("target").setDescription("User to promote").setRequired(true))
+      .addStringOption(o => o.setName("ranks").setDescription("Amount of ranks").setRequired(true).addChoices({name:'1 Rank', value:'1'}, {name:'2 Ranks', value:'2'}))
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles),
+
+    new SlashCommandBuilder()
+      .setName("punish")
+      .setDescription("Issue punishment")
+      .addUserOption(o => o.setName("target").setDescription("User to punish").setRequired(true))
+      .addStringOption(o => o.setName("type").setDescription("Punishment type").setRequired(true).addChoices({name:'Timeout', value:'T'}, {name:'Suspension', value:'S'}))
+      .addStringOption(o => o.setName("reason").setDescription("The reason for punishment").setRequired(true))
+      .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
+
     new SlashCommandBuilder().setName("daily").setDescription("Claim 5 daily points"),
     new SlashCommandBuilder().setName("work").setDescription("Earn 3 points (30m CD)"),
-    new SlashCommandBuilder().setName("balance").setDescription("Check your points")
+    new SlashCommandBuilder().setName("balance").setDescription("Check your wallet")
   ].map(c => c.toJSON());
 
   try {
@@ -108,7 +119,6 @@ client.on(Events.InteractionCreate, async (itx) => {
   if (!itx.guild || !itx.member) return;
   const { commandName, options, user, member, customId } = itx;
 
-  // --- BUTTONS ---
   if (itx.isButton()) {
     if (customId === "hint") return itx.reply({ content: `Hint: It's the home of **${currentRound?.landmark}**`, ephemeral: true });
     if (customId === "skip") {
@@ -122,7 +132,6 @@ client.on(Events.InteractionCreate, async (itx) => {
 
   if (!itx.isChatInputCommand()) return;
 
-  // Economy & Admin Commands
   if (commandName === "promote") {
     const target = options.getMember("target");
     const step = parseInt(options.getString("ranks"));
@@ -132,7 +141,7 @@ client.on(Events.InteractionCreate, async (itx) => {
     await target.roles.remove(rankHierarchy.filter(r => target.roles.cache.has(r))).catch(() => {});
     await target.roles.add(rankHierarchy[newIdx]).catch(() => {});
     log(`📈 Promotion: <@${target.id}> advanced.`);
-    return itx.reply(`✅ <@${target.id}> promoted.`);
+    return itx.reply(`✅ <@${target.id}> promoted to rank index ${newIdx}.`);
   }
 
   if (commandName === "punish") {
@@ -148,14 +157,22 @@ client.on(Events.InteractionCreate, async (itx) => {
 
   if (commandName === "daily") {
     const last = db.getLastDaily(user.id);
-    if (Date.now() - last < 86400000) return itx.reply({ content: "Already claimed.", ephemeral: true });
+    if (Date.now() - last < 86400000) return itx.reply({ content: "Treasury is closed. Come back tomorrow.", ephemeral: true });
     db.addPoints(user.id, 5);
     db.setLastDaily(user.id, Date.now());
-    return itx.reply("💰 +5 Points.");
+    return itx.reply("💰 Treasury payout: +5 Points.");
   }
 
   if (commandName === "balance") {
     return itx.reply({ content: `🏦 Vault: **${db.getPoints(user.id)}** pts.`, ephemeral: true });
+  }
+
+  if (commandName === "work") {
+    const cd = getCD(user.id, "work", 1800000);
+    if (cd) return itx.reply({ content: `⚒️ Wait ${Math.ceil(cd/60000)}m.`, ephemeral: true });
+    db.addPoints(user.id, 3);
+    cooldowns.set(`${user.id}-work`, Date.now());
+    return itx.reply("⚒️ Work complete. +3 Points.");
   }
 });
 
@@ -172,7 +189,7 @@ client.on(Events.MessageCreate, async (msg) => {
     currentRound = null; 
     await msg.react("✅").catch(() => {});
     db.addPoints(msg.author.id, 2);
-    const successMsg = await msg.reply(`🌟 Correct! **${msg.author.username}** identified the location.`);
+    const successMsg = await msg.reply(`🌟 Correct! **${msg.author.username}** found the country.`);
 
     setTimeout(async () => {
       await msg.delete().catch(() => {});
@@ -181,7 +198,6 @@ client.on(Events.MessageCreate, async (msg) => {
       nextRound(msg.channel);
     }, 2500);
   } else {
-    // Incorrect guess logic: React and Delete
     try {
       await msg.react("❌");
       setTimeout(() => msg.delete().catch(() => {}), 1000);
