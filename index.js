@@ -1,152 +1,156 @@
 "use strict";
 
-const { Client, GatewayIntentBits, SlashCommandBuilder, Routes, Events } = require("discord.js");
+const { Client, GatewayIntentBits, SlashCommandBuilder, Routes, Events, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const { REST } = require("@discordjs/rest");
-const db = require("./db"); 
+const ms = require("ms");
+const db = require("./db");
 
+// ================= [ CONFIG ] =================
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 
-const STAFF_ADMIN_CHANNEL = "1494273679951925248";
-const HIGH_STAFF_ROLE = "1494278992402972733";
-const COOLDOWN_ADMIN_ROLE = "1494921889313984552";
+const MODLOGS_CHANNEL = "1494273679951925248";
+const ADMIN_ROLES = ["1494274846912417812", "1494278992402972733"];
+const GUESS_CHANNEL_ID = "1497453944702500864";
 
-const MILESTONE_ROLE_1 = "1494921889313984552";
-const MILESTONE_ROLE_2 = "1494922588428697654";
-// Rank index 6 is the 7th role in the list (1494920425346433045)
-const MILESTONE_RANK_INDEX = 6; 
-
-// RANK HIERARCHY (Index 0 = Rank 1, Index 9 = Rank 10)
 const rankHierarchy = [
-  { id: "1494281388092952576", cd: 86400000 },    // Rank 1: 1 Day
-  { id: "1494918304211402833", cd: 259200000 },   // Rank 2: 3 Days
-  { id: "1494919385654235276", cd: 432000000 },   // Rank 3: 5 Days
-  { id: "1494919521922846790", cd: 604800000 },   // Rank 4: 1 Week
-  { id: "1494919940526964883", cd: 1209600000 },  // Rank 5: 14 Days
-  { id: "1494920068667146251", cd: 1209600000 },  // Rank 6: 14 Days
-  { id: "1494920425346433045", cd: 2160000000 },  // Rank 7: 25 Days
-  { id: "1494920607366647979", cd: 2160000000 },  // Rank 8: 25 Days
-  { id: "1494920909130301490", cd: 2592000000 },  // Rank 9: 30 Days
-  { id: "1494921290061053992", cd: 0 }            // Rank 10: No CD
+  "1494281388092952576", "1494918304211402833", "1494919385654235276",
+  "1494919521922846790", "1494919940526964883", "1494920068667146251",
+  "1494920425346433045", "1494920607366647979", "1494920909130301490", "1494921290061053992"
 ];
 
-const client = new Client({ 
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] 
+// ================= [ STATE ] =================
+let currentRound = null;
+const cooldowns = new Map();
+
+// ================= [ HELPERS ] =================
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
 
-const commands = [
-  new SlashCommandBuilder()
-    .setName("promote")
-    .setDescription("Promote a staff member")
-    .addUserOption(o => o.setName("target").setDescription("User").setRequired(true))
-    .addStringOption(o => o.setName("type").setDescription("Type").setRequired(true)
-        .addChoices({ name: 'Normal Promotion', value: '1' }, { name: 'Move by 2 ranks', value: '2' }, { name: 'Move by 3 ranks', value: '3' }))
-    .addStringOption(o => o.setName("reason").setDescription("Reason").setRequired(true))
-    .addStringOption(o => o.setName("approved_by").setDescription("N/A or @Mention").setRequired(true)),
-  new SlashCommandBuilder()
-    .setName("cooldown")
-    .setDescription("Manage promotion cooldowns")
-    .addSubcommand(s => s.setName("clear").setDescription("Clear a user's cooldown").addUserOption(o => o.setName("target").setDescription("User").setRequired(true)))
-    .addSubcommand(s => s.setName("check").setDescription("Check a user's cooldown").addUserOption(o => o.setName("target").setDescription("User").setRequired(true)))
-].map(c => c.toJSON());
+const isAdmin = (m) => m && ADMIN_ROLES.some(r => m.roles.cache.has(r));
 
-const rest = new REST({ version: "10" }).setToken(TOKEN);
+function log(msg) {
+  const ch = client.channels.cache.get(MODLOGS_CHANNEL);
+  if (ch) ch.send(`🛡️ **System Log:** ${msg}`).catch(() => {});
+}
 
+function getCooldown(id, key, msTime) {
+  const last = cooldowns.get(`${id}-${key}`) || 0;
+  const remaining = msTime - (Date.now() - last);
+  return remaining > 0 ? remaining : 0;
+}
+
+// ================= [ GEOGRAPHY ENGINE ] =================
+async function nextRound(channel) {
+  if (!channel) return;
+  const places = [
+    { name: "Morocco", url: "https://i.imgur.com/B9O08N6.png" },
+    { name: "Palestine", url: "https://i.imgur.com/7S8Y9B0.png" }
+  ];
+
+  currentRound = places[Math.floor(Math.random() * places.length)];
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("hint").setLabel("Hint").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("skip").setLabel("Skip").setStyle(ButtonStyle.Danger)
+  );
+
+  const embed = new EmbedBuilder()
+    .setTitle("🌍 Geography Quiz")
+    .setDescription("Identify the location shown below!")
+    .setImage(currentRound.url)
+    .setColor(0xFFD700);
+
+  await channel.send({ embeds: [embed], components: [row] }).catch(() => {});
+}
+
+// ================= [ INITIALIZATION ] =================
 client.once(Events.ClientReady, async () => {
-  console.log("✅ Lagging Legends Protocol Fully Active");
-  try { await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands }); } catch (e) { console.error(e); }
+  console.log("LL System Online");
+  const rest = new REST({ version: "10" }).setToken(TOKEN);
+  const commands = [
+    new SlashCommandBuilder()
+      .setName("promote")
+      .setDescription("Promote a user within the hierarchy")
+      .addUserOption(o => o.setName("target").setDescription("The user to promote").setRequired(true))
+      .addStringOption(o => o.setName("ranks").setDescription("Number of ranks to increase").setRequired(true))
+  ].map(c => c.toJSON());
+
+  try {
+    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+    const ch = await client.channels.fetch(GUESS_CHANNEL_ID).catch(() => null);
+    if (ch) nextRound(ch);
+  } catch (err) { console.error("Command Registration Failed:", err); }
 });
 
-client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-  const { commandName, options, channelId, member, guild, user } = interaction;
+// ================= [ INTERACTION HANDLER ] =================
+client.on(Events.InteractionCreate, async (itx) => {
+  if (!itx.guild || !itx.member) return;
 
-  // ================= COOLDOWN MANAGEMENT =================
-  if (commandName === "cooldown") {
-    if (!member.roles.cache.has(COOLDOWN_ADMIN_ROLE)) return interaction.reply({ content: "❌ You do not have permission to manage cooldowns.", ephemeral: true });
-    const target = options.getMember("target");
-    const sub = options.getSubcommand();
+  const { commandName, options, user, member, customId } = itx;
 
-    if (sub === "clear") {
-      db.clearCooldown(target.id);
-      return interaction.reply({ content: `✅ Cooldown cleared for <@${target.id}>.`, ephemeral: true });
+  if (itx.isButton()) {
+    if (customId === "hint") {
+        const hint = currentRound?.name?.[0] ? `Starts with: **${currentRound.name[0]}**` : "No active round.";
+        return itx.reply({ content: hint, ephemeral: true });
     }
-    if (sub === "check") {
-      const ts = db.getCooldown(target.id);
-      if (!ts || Number(ts) < Date.now()) return interaction.reply({ content: "🟢 This user has no active cooldown.", ephemeral: true });
-      return interaction.reply({ content: `⏳ <@${target.id}> is on cooldown until <t:${Math.floor(Number(ts) / 1000)}:F>.`, ephemeral: true });
+
+    if (customId === "skip") {
+      const cd = getCooldown(user.id, "skip", 60000);
+      if (cd) return itx.reply({ content: `⏳ Skip is on cooldown (**${Math.ceil(cd/1000)}s**).`, ephemeral: true });
+
+      cooldowns.set(`${user.id}-skip`, Date.now());
+      const oldName = currentRound?.name || "the target";
+      await itx.reply(`🚩 <@${user.id}> skipped. It was **${oldName}**.`);
+      return nextRound(itx.channel);
     }
   }
 
-  // ================= PROMOTION LOGIC =================
+  if (!itx.isChatInputCommand()) return;
+
   if (commandName === "promote") {
-    if (channelId !== STAFF_ADMIN_CHANNEL) return interaction.reply({ content: "⚠️ You cannot use this command in this channel!", ephemeral: true });
-    
-    const targetMember = options.getMember("target");
-    const moveAmount = parseInt(options.getString("type"));
-    const reason = options.getString("reason");
-    const approvedInput = options.getString("approved_by");
+    if (!isAdmin(member)) return itx.reply({ content: "❌ Unauthorized: Administrative clearance required.", ephemeral: true });
 
-    if (!targetMember) return interaction.reply({ content: "⚠️ User not found.", ephemeral: true });
-    if (targetMember.id === user.id) return interaction.reply({ content: "⚠️ You CANNOT promote yourself!", ephemeral: true });
+    const target = options.getMember("target");
+    const step = parseInt(options.getString("ranks"));
 
-    // 1. Cooldown Guard
-    const activeCD = db.getCooldown(targetMember.id);
-    if (activeCD && Number(activeCD) > Date.now()) {
-        return interaction.reply({ content: `⚠️ This user is on cooldown! Available <t:${Math.floor(Number(activeCD) / 1000)}:R>.`, ephemeral: true });
-    }
+    if (!target) return itx.reply({ content: "❌ Target user not found in this jurisdiction.", ephemeral: true });
+    if (isNaN(step) || step <= 0) return itx.reply({ content: "❌ Invalid rank increment.", ephemeral: true });
 
-    // 2. Hierarchy Indices
-    const hierarchyIds = rankHierarchy.map(r => r.id);
-    const yourRankIndex = hierarchyIds.findIndex(id => member.roles.cache.has(id));
-    const targetRankIndex = hierarchyIds.findIndex(id => targetMember.roles.cache.has(id));
+    const currentIdx = rankHierarchy.findIndex(r => target.roles.cache.has(r));
+    // If no rank (-1), starting + step 1 results in rankHierarchy[0]
+    const newIdx = Math.min(rankHierarchy.length - 1, currentIdx + step);
 
-    if (yourRankIndex === -1) return interaction.reply({ content: "⚠️ You lack a recognized staff rank.", ephemeral: true });
-    if (targetRankIndex === -1) return interaction.reply({ content: "⚠️ Target lacks a recognized staff rank.", ephemeral: true });
+    if (newIdx === currentIdx) return itx.reply({ content: "ℹ️ Target is already at the maximum authorized rank.", ephemeral: true });
 
-    const newRankIndex = targetRankIndex + moveAmount;
+    // ATOMIC UPDATE: Filter out the old hierarchy roles and add the new one
+    const rolesToRemove = rankHierarchy.filter(r => target.roles.cache.has(r));
+    if (rolesToRemove.length > 0) await target.roles.remove(rolesToRemove).catch(() => {});
+    await target.roles.add(rankHierarchy[newIdx]).catch(() => {});
 
-    // 3. Security Checks
-    if (newRankIndex >= rankHierarchy.length) return interaction.reply({ content: "⚠️ Move exceeds maximum rank!", ephemeral: true });
-    if (newRankIndex >= yourRankIndex) return interaction.reply({ content: `⚠️ You cannot promote someone to your rank (Rank ${yourRankIndex + 1}) or higher!`, ephemeral: true });
+    log(`📈 **Rank Escalation**: <@${target.id}> advanced from index ${currentIdx} to ${newIdx}.`);
+    return itx.reply(`✅ Promotion successful: <@${target.id}> is now rank index **${newIdx}**.`);
+  }
+});
 
-    // 4. Approval Logic
-    const isHighStaff = member.roles.cache.has(HIGH_STAFF_ROLE);
-    let approverMention = null;
-    if (!isHighStaff && moveAmount > 1) {
-      const match = approvedInput.match(/<@!?(\d+)>/);
-      if (!match) return interaction.reply({ content: "⚠️ Multi-rank moves require a valid @Mention approver!", ephemeral: true });
-      const approver = await guild.members.fetch(match[1]).catch(() => null);
-      if (!approver || !approver.roles.cache.has(HIGH_STAFF_ROLE)) return interaction.reply({ content: "⚠️ Approver must have High Staff role!", ephemeral: true });
-      approverMention = `<@${approver.id}>`;
-    }
+// ================= [ MESSAGE ENGINE ] =================
+client.on(Events.MessageCreate, async (msg) => {
+  if (msg.author.bot || msg.channel.id !== GUESS_CHANNEL_ID || !currentRound) return;
 
-    // 5. Execution
-    try {
-      await targetMember.roles.remove(hierarchyIds[targetRankIndex]);
-      await targetMember.roles.add(hierarchyIds[newRankIndex]);
+  if (msg.content.toLowerCase().trim() === currentRound.name.toLowerCase()) {
+    const winnerId = msg.author.id;
+    await msg.react("✅").catch(() => {});
+    db.addPoints(winnerId, 2);
 
-      // Milestone Check
-      if (newRankIndex >= MILESTONE_RANK_INDEX) {
-          if (!targetMember.roles.cache.has(MILESTONE_ROLE_1)) await targetMember.roles.add(MILESTONE_ROLE_1);
-          if (!targetMember.roles.cache.has(MILESTONE_ROLE_2)) await targetMember.roles.add(MILESTONE_ROLE_2);
-      }
+    // Lock the round to prevent double-guessing during the timeout
+    currentRound = null; 
 
-      // 6. Set Cooldown based on the NEW rank
-      const cdDuration = rankHierarchy[newRankIndex].cd;
-      if (cdDuration > 0) {
-          db.setCooldown(targetMember.id, Date.now() + cdDuration);
-      }
-
-      let output = `## *<@${targetMember.id}> Has been promoted by ${user.username}. Congratulations! 🎉*\n**Reason: ${reason}**`;
-      if (approverMention) output = `## *<@${targetMember.id}> Has been promoted by ${user.username}. Congratulations! 🎉*\n**Reason: ${reason}\nApproved by: ${approverMention}**`;
-
-      return interaction.reply({ content: output });
-    } catch (err) {
-      console.error(err);
-      return interaction.reply({ content: "⚠️ Bot permission error. Check role hierarchy!", ephemeral: true });
-    }
+    setTimeout(async () => {
+      await msg.delete().catch(() => {});
+      nextRound(msg.channel);
+    }, 1500);
   }
 });
 
