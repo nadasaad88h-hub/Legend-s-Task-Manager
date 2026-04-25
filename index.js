@@ -11,7 +11,7 @@ const ms = require("ms");
 const { DISCORD_TOKEN, CLIENT_ID, GUILD_ID } = process.env;
 
 // --- CONFIGURATION ---
-const GUESS_CHANNEL_ID = "1497453944702500864";
+const GUESS_CHANNEL_ID = "1497522337757790258"; // UPDATED CHANNEL ID
 const GAMES_CHANNEL_ID = "1497454650880950322";
 const MODLOGS_CHANNEL = "1494273679951925248";
 const VERIFIED_ROLE_ID = "1494237255148371998";
@@ -73,7 +73,8 @@ function getEngine(channelId) {
             lastUpdate: Date.now(),
             skipsUsed: 0,
             lastSkipReset: Date.now(),
-            hintUsed: false
+            hintUsed: false,
+            hintMsgId: null
         });
     }
     return gameEngines.get(channelId);
@@ -85,18 +86,34 @@ async function startNewRound(channel) {
     engine.status = 'LOCKED';
     engine.lastUpdate = Date.now();
     engine.hintUsed = false;
+    
+    // Cleanup Hint Message
+    if (engine.hintMsgId) {
+        const hMsg = await channel.messages.fetch(engine.hintMsgId).catch(() => null);
+        if (hMsg?.deletable) await hMsg.delete().catch(() => {});
+        engine.hintMsgId = null;
+    }
 
     try {
         if (engine.lastMsgId) {
             const oldMsg = await channel.messages.fetch(engine.lastMsgId).catch(() => null);
             if (oldMsg?.deletable) await oldMsg.delete().catch(() => {});
         }
+        
         const data = placeDatabase[Math.floor(Math.random() * placeDatabase.length)];
-        const embed = new EmbedBuilder().setTitle("🌍 Guess the Place!").setDescription("Win **2 points** by being the first to guess correctly!").setImage(data.url).setColor(0x00AE86);
+        const imageUrl = data.url;
+
+        const embed = new EmbedBuilder()
+            .setTitle("🌍 Guess the Place!")
+            .setDescription("Win **2 points** by being the first to guess correctly!")
+            .setImage(imageUrl)
+            .setColor(0x00AE86);
+            
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId("reveal_letter").setLabel("Hint").setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId("skip_flag").setLabel("Skip").setStyle(ButtonStyle.Danger)
         );
+        
         const sent = await channel.send({ embeds: [embed], components: [row] });
         engine.currentAnswer = data.name;
         engine.lastMsgId = sent.id;
@@ -116,7 +133,6 @@ client.on(Events.InteractionCreate, async (itx) => {
                 engine.hintUsed = true;
                 const letter = engine.currentAnswer[0].toUpperCase();
                 
-                // Update Original Embed
                 const oldEmbed = EmbedBuilder.from(itx.message.embeds[0])
                     .setDescription("Win **1 Point** by being the first to guess correctly!");
                 
@@ -127,8 +143,9 @@ client.on(Events.InteractionCreate, async (itx) => {
 
                 await itx.update({ embeds: [oldEmbed], components: [newRow] });
                 
-                // Public Hint Message
-                return itx.channel.send(`## *${itx.user} has revealed the first letter!*\n**${letter}**`);
+                const hMsg = await itx.channel.send(`## *${itx.user} has revealed the first letter!*\n**${letter}**`);
+                engine.hintMsgId = hMsg.id;
+                return;
             }
 
             if (itx.customId === "skip_flag") {
@@ -156,11 +173,8 @@ client.on(Events.InteractionCreate, async (itx) => {
         if (!itx.isChatInputCommand()) return;
         const { commandName, options, member, user, guild } = itx;
 
-        // --- PUNISH / TIMEOUT ---
         if (commandName === "punish" || commandName === "timeout") {
-            // FIX: IMMEDIATE DEFER TO STOP THINKING GLITCH
             await itx.deferReply({ ephemeral: true });
-
             const target = options.getUser("target");
             const targetMember = options.getMember("target");
             const reason = options.getString("reason");
@@ -170,16 +184,10 @@ client.on(Events.InteractionCreate, async (itx) => {
             if (target.id === user.id && !member.roles.cache.has(BYPASS_SELF_ROLE)) return itx.editReply("⚠️ You cannot punish yourself!");
 
             if (commandName === "timeout") {
-                const durationStr = options.getString("duration");
-                const durationMs = ms(durationStr);
+                const durationMs = ms(options.getString("duration"));
                 if (!durationMs || durationMs > 2419200000) return itx.editReply("⚠️ Invalid duration.");
-                
                 const caseId = db.addPunishment(target.id, "Mute", reason, evidence, user.id);
-                const muteDM = `## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT\n\n## ⚫️ Mute (${durationStr})\n\n**Hello, <@${target.id}>**\n\nYou have been Muted by the LL Server Administration.\n\n**Duration: ${durationStr}**\nReason: ${reason}\nEvidence: ${evidence}`;
-                
-                await target.send(muteDM).catch(() => {});
                 await targetMember.timeout(durationMs, reason).catch(() => {});
-                
                 const log = new EmbedBuilder().setTitle(`Mute // Case ${caseId}`).setDescription(`**Target:** <@${target.id}>\n**Issuer:** <@${user.id}>\n**Reason:** ${reason}`).setColor(0x000000);
                 await guild.channels.cache.get(MODLOGS_CHANNEL).send({ embeds: [log] });
                 return itx.editReply(`✅ Issued **Mute // Case ${caseId}**.`);
@@ -187,23 +195,15 @@ client.on(Events.InteractionCreate, async (itx) => {
 
             if (commandName === "punish") {
                 const type = options.getString("type");
-                const isGen = member.roles.cache.has("1494276990700753018") || member.roles.cache.has("1494277529614159893");
-                if (member.roles.cache.has(BAN_ONLY_ROLE) && !isGen && type !== "Ban") return itx.editReply("❌ Unauthorized for this type.");
-                
                 const caseId = db.addPunishment(target.id, type, reason, evidence, user.id);
-                const tmpl = `## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT\n\n## Punishment: ${type}\n\n**Hello, <@${target.id}>**\n\nReason: ${reason}\nEvidence: ${evidence}`;
-                
-                await target.send(tmpl).catch(() => {});
                 if (type === "Kick") await targetMember.kick(reason).catch(() => {});
                 if (type === "Ban") await guild.members.ban(target.id, { reason }).catch(() => {});
-                
                 const log = new EmbedBuilder().setTitle(`${type} // Case ${caseId}`).setDescription(`**Target:** <@${target.id}>\n**Issuer:** <@${user.id}>\n**Reason:** ${reason}`).setColor(0xFF0000);
                 await guild.channels.cache.get(MODLOGS_CHANNEL).send({ embeds: [log] });
                 return itx.editReply(`✅ Issued **${type} // Case ${caseId}**.`);
             }
         }
         
-        // --- MODLOGS ---
         if (commandName === "modlogs") {
             const target = options.getUser("target");
             const logs = db.getPunishments(target.id) || [];
@@ -211,7 +211,6 @@ client.on(Events.InteractionCreate, async (itx) => {
             const history = logs.map(l => `**Case ${l.id}**: ${l.type} - ${l.reason}`).join("\n");
             return itx.reply({ embeds: [new EmbedBuilder().setTitle(`Logs: ${target.tag}`).setDescription(history).setColor(0x000000)], ephemeral: true });
         }
-        // [ECONOMY CODE REMAINS HERE]
     } catch (e) { console.error(e); }
 });
 
@@ -227,6 +226,13 @@ client.on(Events.MessageCreate, async (msg) => {
         const points = engine.hintUsed ? 1 : 2;
         db.addPoints(msg.author.id, points);
         
+        // Cleanup hint message on guess
+        if (engine.hintMsgId) {
+            const hMsg = await msg.channel.messages.fetch(engine.hintMsgId).catch(() => null);
+            if (hMsg?.deletable) await hMsg.delete().catch(() => {});
+            engine.hintMsgId = null;
+        }
+
         setTimeout(() => { 
             if (msg.deletable) msg.delete().catch(() => {}); 
             startNewRound(msg.channel); 
@@ -237,7 +243,7 @@ client.on(Events.MessageCreate, async (msg) => {
     }
 });
 
-// --- REGISTRATION & STARTUP ---
+// --- REGISTRATION ---
 client.once(Events.ClientReady, async () => {
     const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
     const cmds = [
@@ -245,9 +251,9 @@ client.once(Events.ClientReady, async () => {
         new SlashCommandBuilder().setName("work_points").setDescription("Work for points"),
         new SlashCommandBuilder().setName("check_points").setDescription("Leaderboard"),
         new SlashCommandBuilder().setName("verify_panel").setDescription("Deploy verification"),
-        new SlashCommandBuilder().setName("modlogs").setDescription("View punishment history").addUserOption(o=>o.setName("target").setDescription("User").setRequired(true)),
-        new SlashCommandBuilder().setName("timeout").setDescription("Mute user").addUserOption(o=>o.setName("target").setDescription("User").setRequired(true)).addStringOption(o=>o.setName("duration").setDescription("Duration").setRequired(true)).addStringOption(o=>o.setName("reason").setDescription("Reason").setRequired(true)).addStringOption(o=>o.setName("evidence").setDescription("URL").setRequired(true)),
-        new SlashCommandBuilder().setName("punish").setDescription("Punish user").addUserOption(o=>o.setName("target").setDescription("User").setRequired(true)).addStringOption(o=>o.setName("type").setDescription("Type").setRequired(true).addChoices({name:'Verbal Warning',value:'Verbal Warning'},{name:'Staff Warning',value:'Staff Warning'},{name:'Suspension',value:'Suspension'},{name:'Termination',value:'Termination'},{name:'Kick',value:'Kick'},{name:'Ban',value:'Ban'})).addStringOption(o=>o.setName("reason").setDescription("Reason").setRequired(true)).addStringOption(o=>o.setName("evidence").setDescription("URL").setRequired(true))
+        new SlashCommandBuilder().setName("modlogs").setDescription("View history").addUserOption(o=>o.setName("target").setDescription("User").setRequired(true)),
+        new SlashCommandBuilder().setName("timeout").setDescription("Mute").addUserOption(o=>o.setName("target").setDescription("User").setRequired(true)).addStringOption(o=>o.setName("duration").setDescription("Time").setRequired(true)).addStringOption(o=>o.setName("reason").setDescription("Reason").setRequired(true)).addStringOption(o=>o.setName("evidence").setDescription("URL").setRequired(true)),
+        new SlashCommandBuilder().setName("punish").setDescription("Punish").addUserOption(o=>o.setName("target").setDescription("User").setRequired(true)).addStringOption(o=>o.setName("type").setDescription("Type").setRequired(true).addChoices({name:'Verbal Warning',value:'Verbal Warning'},{name:'Staff Warning',value:'Staff Warning'},{name:'Suspension',value:'Suspension'},{name:'Termination',value:'Termination'},{name:'Kick',value:'Kick'},{name:'Ban',value:'Ban'})).addStringOption(o=>o.setName("reason").setDescription("Reason").setRequired(true)).addStringOption(o=>o.setName("evidence").setDescription("URL").setRequired(true))
     ].map(c => c.toJSON());
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: cmds });
     console.log("🚀 LAGGING LEGENDS SYSTEM ONLINE");
