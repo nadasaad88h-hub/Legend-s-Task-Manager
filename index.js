@@ -28,7 +28,7 @@ const client = new Client({
     ]
 });
 
-// --- EXPANDED IMAGE DATABASE (30+ Locations) ---
+// --- EXPANDED IMAGE DATABASE ---
 const placeDatabase = [
     { name: "Morocco", url: "https://images.unsplash.com/photo-1539020140153-e479b8c22e70" },
     { name: "Egypt", url: "https://images.unsplash.com/photo-1503177119275-0aa32b3a9368" },
@@ -66,13 +66,6 @@ const placeDatabase = [
 const gameEngines = new Map();
 function getEngine(channelId) {
     if (!gameEngines.has(channelId)) {
-        gameEngines.set(channelId, { status: 'IDLE', currentAnswer: null, lastMsgId: null, lastUpdate: Date.now() });
-    }
-    return gameEngines.get(channelId);
-}
-
-async function getEngine(channelId) {
-    if (!gameEngines.has(channelId)) {
         gameEngines.set(channelId, { 
             status: 'IDLE', 
             currentAnswer: null, 
@@ -85,7 +78,11 @@ async function getEngine(channelId) {
     return gameEngines.get(channelId);
 }
 
-
+async function startNewRound(channel) {
+    const engine = getEngine(channel.id);
+    if (engine.status === 'LOCKED' && (Date.now() - engine.lastUpdate < 4000)) return;
+    engine.status = 'LOCKED';
+    engine.lastUpdate = Date.now();
     try {
         if (engine.lastMsgId) {
             const oldMsg = await channel.messages.fetch(engine.lastMsgId).catch(() => null);
@@ -109,23 +106,25 @@ client.on(Events.InteractionCreate, async (itx) => {
     try {
         if (itx.isButton()) {
             const engine = getEngine(itx.channelId);
-                if (itx.customId === "skip_flag") {
-            const engine = getEngine(itx.channelId);
-            if (engine.status !== 'ACTIVE') return itx.reply({ content: "Please wait...", ephemeral: true });
-
-            if (Date.now() - engine.lastSkipReset > 3600000) {
-                engine.skipsUsed = 0;
-                engine.lastSkipReset = Date.now();
+            
+            if (itx.customId === "reveal_letter") {
+                if (engine.status !== 'ACTIVE' || !engine.currentAnswer) return itx.reply({ content: "No round active.", ephemeral: true });
+                return itx.reply({ content: `💡 First letter: **${engine.currentAnswer[0].toUpperCase()}**`, ephemeral: true });
             }
 
-            if (engine.skipsUsed >= 3) {
-                return itx.reply({ content: "❌ **Skip limit reached!** (3 per hour).", ephemeral: true });
+            if (itx.customId === "skip_flag") {
+                if (engine.status !== 'ACTIVE') return itx.reply({ content: "Please wait...", ephemeral: true });
+                if (Date.now() - engine.lastSkipReset > 3600000) {
+                    engine.skipsUsed = 0;
+                    engine.lastSkipReset = Date.now();
+                }
+                if (engine.skipsUsed >= 3) {
+                    return itx.reply({ content: "❌ **Skip limit reached!** (3 per hour).", ephemeral: true });
+                }
+                engine.skipsUsed++;
+                await itx.reply(`🚩 Skipped! (${engine.skipsUsed}/3). It was **${engine.currentAnswer}**.`);
+                return startNewRound(itx.channel);
             }
-
-            engine.skipsUsed++;
-            await itx.reply(`🚩 Skipped! (${engine.skipsUsed}/3). It was **${engine.currentAnswer}**.`);
-            return startNewRound(itx.channel);
-        }
 
             if (itx.customId === "verify_btn") {
                 await itx.member.roles.add(VERIFIED_ROLE_ID).catch(() => {});
@@ -136,7 +135,16 @@ client.on(Events.InteractionCreate, async (itx) => {
         if (!itx.isChatInputCommand()) return;
         const { commandName, options, member, user, guild } = itx;
 
-        // --- PUNISH / TIMEOUT (With Fixes) ---
+        // --- MODLOGS COMMAND ---
+        if (commandName === "modlogs") {
+            const target = options.getUser("target");
+            const logs = db.getPunishments(target.id) || [];
+            if (logs.length === 0) return itx.reply({ content: "No history found.", ephemeral: true });
+            const history = logs.map(l => `**Case ${l.id}**: ${l.type} - ${l.reason}`).join("\n");
+            return itx.reply({ embeds: [new EmbedBuilder().setTitle(`Logs: ${target.tag}`).setDescription(history).setColor(0x000000)], ephemeral: true });
+        }
+
+        // --- PUNISH / TIMEOUT ---
         if (commandName === "punish" || commandName === "timeout") {
             const target = options.getUser("target");
             const targetMember = options.getMember("target");
@@ -224,35 +232,22 @@ client.on(Events.MessageCreate, async (msg) => {
     }
 });
 
+// --- REGISTRATION ---
 client.once(Events.ClientReady, async () => {
     const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
     const cmds = [
-        new SlashCommandBuilder().setName("daily").setDescription("Claim your daily points reward"),
-        new SlashCommandBuilder().setName("work_points").setDescription("Work to earn points"),
-        new SlashCommandBuilder().setName("check_points").setDescription("View the point leaderboard"),
-        new SlashCommandBuilder().setName("verify_panel").setDescription("Deploy the verification panel"),
-        new SlashCommandBuilder().setName("modlogs").setDescription("View a user's punishment history").addUserOption(o=>o.setName("target").setDescription("The user whose logs you want to see").setRequired(true)),
-        new SlashCommandBuilder().setName("timeout").setDescription("Mute a user")
-            .addUserOption(o=>o.setName("target").setDescription("The user to mute").setRequired(true))
-            .addStringOption(o=>o.setName("duration").setDescription("Duration (e.g. 1h, 1d)").setRequired(true))
-            .addStringOption(o=>o.setName("reason").setDescription("Reason for the mute").setRequired(true))
-            .addStringOption(o=>o.setName("evidence").setDescription("URL Link to evidence").setRequired(true)),
-        new SlashCommandBuilder().setName("punish").setDescription("Issue a staff punishment")
-            .addUserOption(o=>o.setName("target").setDescription("The user to punish").setRequired(true))
-            .addStringOption(o=>o.setName("type").setDescription("Punishment type").setRequired(true).addChoices(
-                {name:'Verbal Warning',value:'Verbal Warning'},{name:'Staff Warning',value:'Staff Warning'},
-                {name:'Suspension',value:'Suspension'},{name:'Termination',value:'Termination'},
-                {name:'Kick',value:'Kick'},{name:'Ban',value:'Ban'}
-            ))
-            .addStringOption(o=>o.setName("reason").setDescription("Reason for the punishment").setRequired(true))
-            .addStringOption(o=>o.setName("evidence").setDescription("URL Link to evidence").setRequired(true))
+        new SlashCommandBuilder().setName("daily").setDescription("Claim daily points"),
+        new SlashCommandBuilder().setName("work_points").setDescription("Work for points"),
+        new SlashCommandBuilder().setName("check_points").setDescription("View leaderboard"),
+        new SlashCommandBuilder().setName("verify_panel").setDescription("Deploy verification button"),
+        new SlashCommandBuilder().setName("modlogs").setDescription("View a user's punishment history").addUserOption(o=>o.setName("target").setDescription("User to view logs for").setRequired(true)),
+        new SlashCommandBuilder().setName("timeout").setDescription("Mute a user").addUserOption(o=>o.setName("target").setDescription("User").setRequired(true)).addStringOption(o=>o.setName("duration").setDescription("Duration").setRequired(true)).addStringOption(o=>o.setName("reason").setDescription("Reason").setRequired(true)).addStringOption(o=>o.setName("evidence").setDescription("URL").setRequired(true)),
+        new SlashCommandBuilder().setName("punish").setDescription("Issue a punishment").addUserOption(o=>o.setName("target").setDescription("User").setRequired(true)).addStringOption(o=>o.setName("type").setDescription("Type").setRequired(true).addChoices({name:'Verbal Warning',value:'Verbal Warning'},{name:'Staff Warning',value:'Staff Warning'},{name:'Suspension',value:'Suspension'},{name:'Termination',value:'Termination'},{name:'Kick',value:'Kick'},{name:'Ban',value:'Ban'})).addStringOption(o=>o.setName("reason").setDescription("Reason").setRequired(true)).addStringOption(o=>o.setName("evidence").setDescription("URL").setRequired(true))
     ].map(c => c.toJSON());
-
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: cmds });
     console.log("🚀 LAGGING LEGENDS SYSTEM ONLINE");
     const chan = await client.channels.fetch(GUESS_CHANNEL_ID).catch(() => null);
     if (chan) startNewRound(chan);
 });
-
 
 client.login(DISCORD_TOKEN);
