@@ -43,7 +43,6 @@ const placeDatabase = [
 
 const client = new Client({ intents: [3276799] });
 
-// --- GAME STATE ---
 let currentCountry = "";
 let engineStatus = "IDLE";
 let hintUsed = false;
@@ -69,7 +68,6 @@ async function startNextRound(channel) {
     engineStatus = "ACTIVE";
 }
 
-// ================= [ INTERACTION HANDLER ] =================
 client.on(Events.InteractionCreate, async (itx) => {
     const { commandName, options, member, user, guild, customId } = itx;
 
@@ -91,32 +89,47 @@ client.on(Events.InteractionCreate, async (itx) => {
 
     if (!itx.isChatInputCommand()) return;
 
-    // --- POINTS COMMANDS ---
+    if (commandName === "embed") {
+        if (!member.roles.cache.has(VERIFY_ADMIN_ROLE)) return itx.reply({ content: "❌ Unauthorized.", ephemeral: true });
+        const title = options.getString("title");
+        const description = options.getString("description").replace(/\\n/g, '\n');
+        const color = options.getString("color") || "#000000";
+        const channel = options.getChannel("channel") || itx.channel;
+
+        const embed = new EmbedBuilder()
+            .setTitle(title)
+            .setDescription(description)
+            .setColor(color)
+            .setTimestamp();
+
+        await channel.send({ embeds: [embed] });
+        return itx.reply({ content: "✅ Embed sent!", ephemeral: true });
+    }
+
     if (commandName === "check_points") {
         const target = options.getUser("user") || user;
         return itx.reply(`💰 **${target.username}** has **${db.getPoints(target.id)} points**.`);
     }
-    if (commandName === "daily") {
+
+    if (commandName === "daily_points") {
         const reward = db.claimDaily(user.id);
         return itx.reply(reward ? `✅ You claimed **${reward} points**!` : "⏳ Already claimed today.");
     }
+
     if (commandName === "work_points") {
         db.addPoints(user.id, 5);
         return itx.reply("🛠️ Work recorded. **5 points** added.");
     }
 
-    // --- PUNISHMENT REVERT ---
     if (commandName === "punish_revert") {
         if (!member.roles.cache.has(VERIFY_ADMIN_ROLE)) return itx.reply("❌ LL Leadership only.");
         const target = options.getUser("target");
         const type = options.getString("type");
-        
         await target.send(`## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT REVERSAL\n\n🟢 Punishment Reversal\n\nHello, <@${target.id}>\n\nYour **${type}** record has been officially removed from your modlogs in the Lagging Legends Community.\n\nRepeating actions will result in harsher disciplinary action.`).catch(()=>{});
         db.removePunishment(options.getString("case_id"));
         return itx.reply(`✅ Reversal issued for Case ${options.getString("case_id")}.`);
     }
 
-    // --- TIMEOUT COMMAND ---
     if (commandName === "timeout") {
         const target = options.getUser("target");
         const targetMember = options.getMember("target");
@@ -142,7 +155,6 @@ client.on(Events.InteractionCreate, async (itx) => {
         return itx.editReply(`✅ Issued **Mute // Case ${caseId}**.`);
     }
 
-    // --- PUNISH COMMAND ---
     if (commandName === "punish") {
         const type = options.getString("type");
         const target = options.getUser("target");
@@ -163,4 +175,70 @@ client.on(Events.InteractionCreate, async (itx) => {
             "Suspension": `## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT\n\n## 🟣 Suspension\n\n**Hello, <@${target.id}>**\n\nYou have been placed under Suspension by the LL Server Administration due to a serious rule violation or staff misconduct. During this period, your permissions and responsibilities may be restricted while management reviews the situation.\n\nReason: ${reason}\nEvidence: ${evidence}\n\nFurther violations or failure to cooperate during this review may result in permanent removal from your position or additional disciplinary action.`,
             "Termination": `## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT\n\n## 🟤 Termination\n\n**Hello, <@${target.id}>**\n\nYou have been Terminated by the LL Server Administration due to repeated violations, misconduct, or failure to meet expectations. Your staff permissions and responsibilities have been removed.\n\nReason: ${reason}\nEvidence: ${evidence}\n\nThis decision is considered final unless management decides otherwise. If appeals are permitted, they must be made respectfully through the proper process.`,
             "Kick": `## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT\n\n## ⚫️ Kick\n\n**Hello, <@${target.id}>**\n\nYou have been Kicked by the LL Server Administration due to a violation of the rules or disruptive behavior. You may be able to rejoin depending on the situation.\n\nReason: ${reason}\nEvidence: ${evidence}\n\nReturning and repeating the same behavior may lead to stronger disciplinary action, including a temporary or permanent ban from the community.`,
-            "Ban": `## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT\n\n## ⚫️ Ban\n\n**Hello, <@${target.id}>**\n\
+            "Ban": `## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT\n\n## ⚫️ Ban\n\n**Hello, <@${target.id}>**\n\nYou have been Banned from Lagging Legends by the LL Server Administration due to severe rule violations, repeated misconduct, or actions harmful to the community. Your access to the server has been permanently removed.\n\nReason: ${reason}\nEvidence: ${evidence}\n\nAny appeal, if allowed, must be submitted respectfully through the proper appeal process. False or disrespectful appeals may be denied immediately.`
+        };
+
+        await target.send(templates[type]).catch(() => {}); 
+        if (type === "Kick") await guild.members.kick(target.id, reason).catch(()=>{});
+        if (type === "Ban") await guild.members.ban(target.id, { reason }).catch(()=>{});
+
+        const log = new EmbedBuilder().setTitle(`${type} // Case ${caseId}`).setDescription(`**Target:** <@${target.id}>\n**Reason:** ${reason}`).setColor(0xFF0000);
+        guild.channels.cache.get(MODLOGS_CHANNEL).send({ embeds: [log] });
+        return itx.editReply(`✅ Issued **${type} // Case ${caseId}**.`);
+    }
+
+    if (commandName === "promote") {
+        if (itx.channelId !== STAFF_ADMIN_CHANNEL) return itx.reply("⚠️ Wrong channel.");
+        const targetMember = options.getMember("target");
+        const move = parseInt(options.getString("type"));
+        const hierarchyIds = rankHierarchy.map(r => r.id);
+        let currentIdx = hierarchyIds.findIndex(id => targetMember.roles.cache.has(id));
+        if (currentIdx === -1) currentIdx = 0;
+        const newIdx = Math.min(currentIdx + move, hierarchyIds.length - 1);
+
+        if (currentIdx !== 0) await targetMember.roles.remove(hierarchyIds[currentIdx]);
+        await targetMember.roles.add(hierarchyIds[newIdx]);
+        if (newIdx >= MILESTONE_RANK_INDEX) await targetMember.roles.add([MILESTONE_ROLE_1, MILESTONE_ROLE_2]);
+
+        return itx.reply(`## *<@${targetMember.id}> Promoted by ${user.username}. 🎉*\n**Reason: ${options.getString("reason")}**`);
+    }
+
+    if (commandName === "verify_panel") {
+        const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("verify_btn").setLabel("Verify").setStyle(ButtonStyle.Success));
+        return itx.reply({ content: "## Lagging Legends Verification\nClick below to verify.", components: [row] });
+    }
+});
+
+client.on(Events.MessageCreate, async (msg) => {
+    if (msg.channel.id !== GUESS_CHANNEL_ID || msg.author.bot || engineStatus !== "ACTIVE") return;
+    if (msg.content.toLowerCase().trim() === currentCountry.toLowerCase().trim()) {
+        engineStatus = "LOCKED";
+        await msg.react("✅");
+        db.addPoints(msg.author.id, 2);
+        setTimeout(() => { if (msg.deletable) msg.delete().catch(()=>{}); startNextRound(msg.channel); }, 2000);
+    }
+});
+
+client.once(Events.ClientReady, async () => {
+    const commands = [
+        new SlashCommandBuilder().setName('embed').setDescription('Create an announcement embed').addStringOption(o=>o.setName('title').setDescription('Embed title').setRequired(true)).addStringOption(o=>o.setName('description').setDescription('Embed text (use \\n for new lines)').setRequired(true)).addStringOption(o=>o.setName('color').setDescription('Hex color code (e.g. #FF0000)')).addChannelOption(o=>o.setName('channel').setDescription('Channel to send to')),
+        new SlashCommandBuilder().setName('check_points').setDescription('Check points balance').addUserOption(o=>o.setName('user').setDescription('User to check').setRequired(false)),
+        new SlashCommandBuilder().setName('daily_points').setDescription('Claim daily reward points'),
+        new SlashCommandBuilder().setName('work_points').setDescription('Claim staff work points'),
+        new SlashCommandBuilder().setName('verify_panel').setDescription('Send verification panel (Management)'),
+        new SlashCommandBuilder().setName('punish_revert').setDescription('Revert a punishment (Leadership)').addUserOption(o=>o.setName('target').setDescription('The user').setRequired(true)).addStringOption(o=>o.setName('type').setDescription('The type').setRequired(true)).addStringOption(o=>o.setName('case_id').setDescription('Case ID').setRequired(true)),
+        new SlashCommandBuilder().setName('promote').setDescription('Promote a staff member').addUserOption(o=>o.setName('target').setDescription('The user').setRequired(true)).addStringOption(o=>o.setName('type').setDescription('Amount').setRequired(true).addChoices({name:'+1',value:'1'},{name:'+2',value:'2'})).addStringOption(o=>o.setName('reason').setDescription('Reason').setRequired(true)),
+        new SlashCommandBuilder().setName('punish').setDescription('Issue a punishment').addUserOption(o=>o.setName('target').setDescription('The user').setRequired(true)).addStringOption(o=>o.setName('type').setDescription('The type').setRequired(true).addChoices({name:'Verbal Warning',value:'Verbal Warning'},{name:'Staff Warning',value:'Staff Warning'},{name:'Suspension',value:'Suspension'},{name:'Termination',value:'Termination'},{name:'Kick',value:'Kick'},{name:'Ban',value:'Ban'})).addStringOption(o=>o.setName('reason').setDescription('The reason').setRequired(true)).addStringOption(o=>o.setName('evidence').setDescription('Link to evidence').setRequired(true)),
+        new SlashCommandBuilder().setName('timeout').setDescription('Mute a user').addUserOption(o=>o.setName('target').setDescription('The user').setRequired(true)).addStringOption(o=>o.setName('duration').setDescription('Mute duration').setRequired(true)).addStringOption(o=>o.setName('reason').setDescription('The reason').setRequired(true)).addStringOption(o=>o.setName('evidence').setDescription('Link to evidence').setRequired(true))
+    ].map(c => c.toJSON());
+
+    const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
+    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+    
+    console.log("🚀 ONLINE | COMMANDS REGISTERED");
+    
+    const chan = await client.channels.fetch(GUESS_CHANNEL_ID).catch(() => null);
+    if (chan) startNextRound(chan);
+});
+
+client.login(DISCORD_TOKEN);
