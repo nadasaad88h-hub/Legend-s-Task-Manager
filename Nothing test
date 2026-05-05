@@ -1,0 +1,823 @@
+"use strict";
+require('dotenv').config();
+const { Client, GatewayIntentBits, Partials, Collection, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require('discord.js');
+const mongoose = require('mongoose');
+
+const client = new Client({
+    intents: [
+        GatewayIntentBits.Guilds, 
+        GatewayIntentBits.GuildMessages, 
+        GatewayIntentBits.MessageContent, 
+        GatewayIntentBits.GuildMembers, 
+        GatewayIntentBits.GuildMessageReactions
+    ],
+    partials: [Partials.Channel, Partials.Message, Partials.User, Partials.Reaction]
+});
+
+const CHANNELS = {
+    PROMOTION: "1494273679951925248",
+    GUESSING: "1497522337757790258",
+    COUNTING: "1494238876829483078",
+    VERIFY: "1494235821899907153",
+    POINTS: "1497454650880950322",
+    LOGS: "1500746273962066080",
+    SALES: "1499079029246922823",
+    GIVEAWAY: "1494236313367482400"
+};
+
+const ROLES = {
+    IRON: "1494281388092952576", // Lowest level, cannot be removed
+    VERIFIED: "1494279460373926030",
+    UNVERIFIED: "1494279535108292709",
+    SALES_HC: "1499081250214772971",
+    QUOTA_ROLE: "1494295892206030969",
+    STAFF_WATCH: "1500747799564914808"
+};
+
+// Array goes from lowest rank (Iron) to the highest rank
+const PROMOTION_RANKS = [
+    "1494281388092952576",
+    "1494919385654235276",
+    "1494919521922846790",
+    "1494919940526964883",
+    "1494920068667146251",
+    "1494920425346433045",
+    "1494920607366647979",
+    "1494920909130301490",
+    "1494921290061053992"
+];
+
+// --- DATABASE MODELS ---
+const userSchema = new mongoose.Schema({
+    userId: String,
+    points: { type: Number, default: 0 },
+    vault: { type: Number, default: 0 },
+    streak: { type: Number, default: 3 },
+    lastDaily: Date,
+    lastEarn: Date,
+    lastSteal: Date,
+    skips: { count: { type: Number, default: 0 }, lastReset: Date },
+    msgsWeekly: { type: Number, default: 0 },
+    punishments: Array
+});
+const User = mongoose.model('User', userSchema);
+
+const giveawaySchema = new mongoose.Schema({
+    id: String,
+    msgId: String,
+    prize: String,
+    winners: Number,
+    entries: Array,
+    host: String,
+    end: Date
+});
+const Giveaway = mongoose.model('Giveaway', giveawaySchema);
+
+// --- GLOBAL STATE ---
+let currentCount = 42;
+let activeGuess = null;
+
+// --- UTILITIES ---
+const getDB = async (uid) => await User.findOne({ userId: uid }) || await User.create({ userId: uid });
+
+// --- INTERACTION HANDLER (BUTTONS & COMMANDS BASE) ---
+client.on('interactionCreate', async (interaction) => {
+    // 1. Handle Buttons (Verification & Games)
+    if (interaction.isButton()) {
+        if (interaction.customId === 'verify_btn') {
+            await interaction.reply({ content: "✅ You have been successfully verified that you are not a bot.", ephemeral: true });
+            
+            // 3-second delay before swapping roles
+            setTimeout(async () => {
+                try {
+                    await interaction.member.roles.add(ROLES.VERIFIED);
+                    await interaction.member.roles.remove(ROLES.UNVERIFIED);
+                } catch (err) {
+                    console.error("Error swapping verification roles:", err);
+                }
+            }, 3000);
+            return; // Exit out of the listener for this interaction
+        }
+        // Future buttons (Guessing Game, Store, Giveaways) will go here
+    }
+
+    // 2. Handle Slash Commands
+    if (!interaction.isChatInputCommand()) return;
+    
+    const db = await getDB(interaction.user.id);
+    
+    // Commands will be injected below this line in the next sections
+});
+       // --- PROMOTE COMMAND ---
+    if (interaction.commandName === 'promote') {
+        if (interaction.channelId !== CHANNELS.PROMOTION) {
+            return interaction.reply({ content: "🚨 You cannot use this command in this channel!", ephemeral: true });
+        }
+
+        const target = interaction.options.getMember('user');
+        const reason = interaction.options.getString('reason') || "No reason provided.";
+        
+        const currentRankIndex = PROMOTION_RANKS.findIndex(roleId => target.roles.cache.has(roleId));
+        
+        if (currentRankIndex === PROMOTION_RANKS.length - 1) {
+            return interaction.reply({ content: "⚠️ This user is already at the maximum rank!", ephemeral: true });
+        }
+
+        const newRank = PROMOTION_RANKS[currentRankIndex + 1];
+        const oldRank = currentRankIndex !== -1 ? PROMOTION_RANKS[currentRankIndex] : null;
+
+        await target.roles.add(newRank);
+
+        // Logic: Role 1494281388092952576 is NEVER removed. Others are swapped.
+        if (oldRank && oldRank !== "1494281388092952576") {
+            await target.roles.remove(oldRank);
+        }
+
+        const newRankName = interaction.guild.roles.cache.get(newRank)?.name || "New Rank";
+        const oldRankName = oldRank ? (interaction.guild.roles.cache.get(oldRank)?.name || "Old Rank") : "None";
+
+        return interaction.reply({
+            content: `## *Promotion*\n**Username:** ${interaction.user.username}\n**Server rank:** ${interaction.member.roles.highest.name}\n**Their username:** ${target.user.username}\n**Old rank - New rank:** ${oldRankName} -> ${newRankName}\n**Reason:** ${reason}`
+        });
+    }
+
+    // --- DEMOTE COMMAND ---
+    if (interaction.commandName === 'demote') {
+        // Only specific Role ID can execute demotion
+        if (!interaction.member.roles.cache.has("1494918304211402833")) {
+            return interaction.reply({ content: "❌ You do not have permission to use this command.", ephemeral: true });
+        }
+
+        const target = interaction.options.getMember('user');
+        const reason = interaction.options.getString('reason') || "No reason provided.";
+
+        // Error: Cannot demote the base rank 1494281388092952576
+        if (target.roles.cache.has("1494281388092952576") && target.roles.cache.size <= 2) {
+             return interaction.reply({ content: "⚠️ You cannot demote this user as he is on the lowest level!", ephemeral: true });
+        }
+
+        const currentRankIndex = PROMOTION_RANKS.findIndex(roleId => target.roles.cache.has(roleId));
+
+        if (currentRankIndex > 0) {
+            const oldRank = PROMOTION_RANKS[currentRankIndex];
+            const newRank = PROMOTION_RANKS[currentRankIndex - 1];
+
+            await target.roles.remove(oldRank);
+            await target.roles.add(newRank);
+
+            return interaction.reply({
+                content: `## *Demotion*\n**Username:** ${interaction.user.username}\n**Server rank:** ${interaction.member.roles.highest.name}\n**Their username:** ${target.user.username}\n**Old rank - New rank:** ${interaction.guild.roles.cache.get(oldRank).name} -> ${interaction.guild.roles.cache.get(newRank).name}\n**Reason:** ${reason}`
+            });
+        }
+    }
+
+// --- GUESS THE LOCATION DATA & UTILS ---
+const LOCATIONS = [
+    { name: "France", url: "https://i.imgur.com/eiffel-tower.jpg" },
+    { name: "China", url: "https://i.imgur.com/great-wall.jpg" },
+    { name: "Japan", url: "https://i.imgur.com/mount-fuji.jpg" },
+    { name: "Egypt", url: "https://i.imgur.com/pyramids.jpg" },
+    { name: "America", url: "https://i.imgur.com/statue-liberty.jpg" },
+    { name: "Russia", url: "https://i.imgur.com/st-basils.jpg" },
+    { name: "Mexico", url: "https://i.imgur.com/chichen-itza.jpg" },
+    { name: "Morocco", url: "https://i.imgur.com/blue-city.jpg" }
+];
+
+async function startNewGuessRound() {
+    const location = LOCATIONS[Math.floor(Math.random() * LOCATIONS.length)];
+    const channel = client.channels.cache.get(CHANNELS.GUESSING);
+    if (!channel) return;
+
+    const embed = new EmbedBuilder()
+        .setTitle("🌎 Guess the place!")
+        .setDescription("First person to guess correctly gets **2 Points!**")
+        .setImage(location.url)
+        .setColor("#00AAFF");
+
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('guess_hint').setLabel('Hint').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('guess_skip').setLabel('Skip').setStyle(ButtonStyle.Danger)
+    );
+
+    const msg = await channel.send({ embeds: [embed], components: [row] });
+    activeGuess = { 
+        name: location.name, 
+        msgId: msg.id, 
+        points: 2, 
+        hinted: false, 
+        hintMsgId: null 
+    };
+}
+
+// Logic for handling the rolling 1-hour skip limit
+function canUserSkip(db) {
+    const now = Date.now();
+    const oneHour = 3600000;
+    
+    // Filter out skips older than 1 hour
+    if (!db.skips.history) db.skips.history = [];
+    db.skips.history = db.skips.history.filter(timestamp => (now - timestamp) < oneHour);
+    
+    return db.skips.history.length < 3;
+}
+
+// --- GUESS THE LOCATION DATA & UTILS ---
+const LOCATIONS = [
+    { name: "France", url: "https://i.imgur.com/8P9i9vU.jpeg" }, // Eiffel Tower
+    { name: "China", url: "https://i.imgur.com/S9R0Dbe.jpeg" }, // Great Wall
+    { name: "Japan", url: "https://i.imgur.com/6SUp7Yn.jpeg" }, // Mount Fuji
+    { name: "Egypt", url: "https://i.imgur.com/mOqW26m.jpeg" }, // Pyramids
+    { name: "America", url: "https://i.imgur.com/39p662L.jpeg" }, // Statue of Liberty
+    { name: "Russia", url: "https://i.imgur.com/uXmR80r.jpeg" }, // St. Basil's
+    { name: "Mexico", url: "https://i.imgur.com/k6rFvUu.jpeg" }, // Chichen Itza
+    { name: "Morocco", url: "https://i.imgur.com/7xN6F2L.jpeg" }  // Blue City (Chefchaouen)
+];
+
+async function startNewGuessRound() {
+    const location = LOCATIONS[Math.floor(Math.random() * LOCATIONS.length)];
+    const channel = client.channels.cache.get(CHANNELS.GUESSING);
+    if (!channel) return;
+
+    const embed = new EmbedBuilder()
+        .setTitle("🌎 Guess the place!")
+        .setDescription("First person to guess correctly gets **2 Points!**")
+        .setImage(location.url)
+        .setColor("#00AAFF");
+
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('guess_hint').setLabel('Hint').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('guess_skip').setLabel('Skip').setStyle(ButtonStyle.Danger)
+    );
+
+    const msg = await channel.send({ embeds: [embed], components: [row] });
+    activeGuess = { 
+        name: location.name, 
+        msgId: msg.id, 
+        points: 2, 
+        hinted: false, 
+        hintMsgId: null 
+    };
+}
+
+function canUserSkip(db) {
+    const now = Date.now();
+    const oneHour = 3600000;
+    
+    // Ensure history exists as an array
+    if (!db.skips) db.skips = { history: [] };
+    if (!db.skips.history) db.skips.history = [];
+    
+    // Filter history to only keep skips from the last hour
+    db.skips.history = db.skips.history.filter(timestamp => (now - timestamp) < oneHour);
+    
+    return db.skips.history.length < 3;
+}
+
+        // Guessing Game: Hint Button
+        if (interaction.customId === 'guess_hint' && activeGuess) {
+            if (activeGuess.hinted) return interaction.reply({ content: "⚠️ Hint already given!", ephemeral: true });
+
+            activeGuess.hinted = true;
+            activeGuess.points = 1;
+
+            const firstLetter = activeGuess.name.charAt(0).toUpperCase();
+            const hintMsg = await interaction.channel.send(`## *${interaction.user.username} has Requested for a hint!*\n**${firstLetter}**`);
+            activeGuess.hintMsgId = hintMsg.id;
+
+            // Update the original embed to reflect lower points and disable button
+            const msg = await interaction.channel.messages.fetch(activeGuess.msgId);
+            const embed = EmbedBuilder.from(msg.embeds[0]).setDescription("First person to guess correctly gets **1 Point!**");
+            const row = ActionRowBuilder.from(msg.components[0]);
+            row.components[0].setLabel('Hint Given').setDisabled(true);
+            
+            await msg.edit({ embeds: [embed], components: [row] });
+            return interaction.deferUpdate();
+        }
+
+        // Guessing Game: Skip Button
+        if (interaction.customId === 'guess_skip' && activeGuess) {
+            const userDB = await getDB(interaction.user.id);
+            if (!canUserSkip(userDB)) {
+                const now = Date.now();
+                const oldestSkip = userDB.skips.history[0];
+                const timeLeft = Math.ceil((3600000 - (now - oldestSkip)) / 60000);
+                return interaction.reply({ content: `⚠️ You have reached your skip limit! You may retry again in ${timeLeft} minutes.`, ephemeral: true });
+            }
+
+            // Log the skip
+            userDB.skips.history.push(Date.now());
+            await userDB.save();
+
+            // Cleanup current round
+            const msg = await interaction.channel.messages.fetch(activeGuess.msgId);
+            if (msg) await msg.delete();
+            if (activeGuess.hintMsgId) {
+                const hMsg = await interaction.channel.messages.fetch(activeGuess.hintMsgId).catch(() => null);
+                if (hMsg) await hMsg.delete();
+            }
+
+            activeGuess = null;
+            await interaction.reply({ content: "🔄 Skipping to next round...", ephemeral: true });
+            return setTimeout(startNewGuessRound, 2000);
+        }
+
+    // --- ECONOMY COMMANDS CHECKER (Fixed Cooldown Logic) ---
+    const economyCommands = ['steal_points', 'earn_points', 'daily_points'];
+    if (economyCommands.includes(interaction.commandName)) {
+        if (interaction.channelId !== CHANNELS.POINTS) {
+            return interaction.reply({ content: "🚨 You cannot use this command in this channel!", ephemeral: true });
+        }
+
+        const now = Date.now();
+        const cooldownTime = 30 * 60 * 1000; 
+        // FIX: Using a dedicated 'lastUsed' timestamp instead of 'lastEarn'
+        const lastUsed = db.lastEarn ? db.lastEarn.getTime() : 0; 
+
+        if (now - lastUsed < cooldownTime) {
+            const expirationTime = Math.floor((lastUsed + cooldownTime) / 1000);
+            return interaction.reply({ content: `⚠️ You cannot execute the command yet! Please wait <t:${expirationTime}:R> in order to use the command again.`, ephemeral: true });
+        }
+    }
+
+    // --- CHECK POINTS (Leaderboard) ---
+    if (interaction.commandName === 'check_points') {
+        const topUsers = await User.find().sort({ points: -1 }).limit(10);
+        let leaderboard = topUsers.map((u, i) => `${i + 1}. <@${u.userId}>: ${u.points} Points`).join('\n');
+        
+        return interaction.reply({
+            content: `### Leaderboard\n${leaderboard || "No data yet."}\n\n**You:** ${db.points} Points\n**Withdrawn Points:** ${db.vault} Points`,
+            ephemeral: true
+        });
+    }
+
+    // --- WITHDRAW POINTS ---
+    if (interaction.commandName === 'withdraw_points') {
+        const amount = interaction.options.getInteger('amount');
+        if (amount > db.points) return interaction.reply({ content: "⚠️ You don't have enough points to withdraw!", ephemeral: true });
+
+        db.points -= amount;
+        db.vault += amount;
+        await db.save();
+        return interaction.reply({ content: `✅ Successfully moved **${amount} Points** to your vault.`, ephemeral: true });
+    }
+
+    // --- STEAL POINTS ---
+    if (interaction.commandName === 'steal_points') {
+        const target = interaction.options.getUser('user');
+        const amountReq = interaction.options.getInteger('amount');
+        
+        if (target.id === interaction.user.id) return interaction.reply({ content: "❌ You cannot steal from yourself!", ephemeral: true });
+        
+        const targetDB = await getDB(target.id);
+        if (targetDB.vault > 0) return interaction.reply({ content: "🛡️ This user has points in their vault! You cannot steal from them.", ephemeral: true });
+
+        const actualSteal = Math.min(amountReq, targetDB.points);
+        const success = Math.random() < 0.5;
+
+        if (success) {
+            targetDB.points -= actualSteal;
+            db.points += actualSteal;
+            await interaction.reply({ content: `🚨 **${interaction.user.username}** has stole **${actualSteal} Points** from <@${target.id}>!` });
+        } else {
+            const penalty = Math.min(amountReq, db.points);
+            db.points -= penalty;
+            await interaction.reply({ 
+                content: `🚨 **${interaction.user.username}** attempted to **steal ${amountReq} Points** from <@${target.id}> and got **caught!** Oof, better luck next time!\n***Points lost: ${penalty}***` 
+            });
+        }
+        db.lastEarn = new Date(); 
+        await db.save(); await targetDB.save();
+    }
+
+    // --- EARN POINTS ---
+    if (interaction.commandName === 'earn_points') {
+        db.points += 2;
+        db.lastEarn = new Date();
+        await db.save();
+        return interaction.reply({ content: "🌙 You had a night shift and earned 2 points, well done!", ephemeral: true });
+    }
+
+    // --- DAILY POINTS ---
+    if (interaction.commandName === 'daily_points') {
+        const now = new Date();
+        const oneDay = 24 * 60 * 60 * 1000;
+        const twoDays = 48 * 60 * 60 * 1000;
+
+        // Daily has its own internal check, but also updates the global economy cooldown
+        if (db.lastDaily && (now - db.lastDaily < oneDay)) {
+            const expirationTime = Math.floor((db.lastDaily.getTime() + oneDay) / 1000);
+            return interaction.reply({ content: `⚠️ Daily reset in <t:${expirationTime}:R>.`, ephemeral: true });
+        }
+
+        if (db.lastDaily && (now - db.lastDaily > twoDays)) {
+            db.streak = 3;
+        } else {
+            db.streak = Math.min((db.streak || 3) + 1, 10);
+        }
+
+        db.points += db.streak;
+        db.lastDaily = now;
+        db.lastEarn = now; 
+        await db.save();
+        return interaction.reply({ content: `📅 Daily Claimed! You earned **${db.streak} Points**. (Streak: ${db.streak})`, ephemeral: true });
+    }
+
+    // --- COLLECT POINTS ---
+    if (interaction.commandName === 'collect_points') {
+        const amount = interaction.options.getInteger('amount');
+        const actualCollect = Math.min(amount, db.vault);
+
+        db.vault -= actualCollect;
+        db.points += actualCollect;
+        await db.save();
+        return interaction.reply({ content: `✅ Collected **${actualCollect} Points** from your vault.`, ephemeral: true });
+    }
+
+    // --- PUNISH COMMAND ---
+    if (interaction.commandName === 'punish') {
+        // Permissions Check (Staff Role)
+        if (!interaction.member.roles.cache.has("1494918304211402833")) {
+            return interaction.reply({ content: "❌ You do not have permission to issue punishments.", ephemeral: true });
+        }
+
+        const target = interaction.options.getMember('user');
+        const type = interaction.options.getString('type'); 
+        const reason = interaction.options.getString('reason');
+        const evidence = interaction.options.getString('evidence');
+        
+        const caseNumber = Math.floor(10000 + Math.random() * 90000); 
+        const targetDB = await getDB(target.id);
+        const targetMention = `<@${target.id}>`;
+
+        let dmMessage = "";
+
+        // --- EXACT DM TEMPLATES ---
+        if (type === 'Verbal') {
+            dmMessage = `## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT\n## 🔴 Verbal Warning\n\n**Hello, ${targetMention}**\n\nYou have received a Verbal Warning from the Lagging Legends Server Administration. Please review the server rules and ensure your future behavior aligns with community expectations.\n\n**Reason:** ${reason}\n**Evidence:** ${evidence}\n**Case ID:** #${caseNumber}\n\n*Repeating this behavior may result in further disciplinary action.*`;
+        } 
+        else if (type === 'Staff') {
+            dmMessage = `## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT\n## 🟡 Staff Warning\n\n**Hello, ${targetMention}**\n\nYou have received a Staff Warning from the Lagging Legends Server Administration. This is a formal notice regarding your conduct as a member of our community.\n\n**Reason:** ${reason}\n**Evidence:** ${evidence}\n**Case ID:** #${caseNumber}\n\n*Continued issues may lead to suspension or termination of your position.*`;
+        }
+        else if (type === 'Suspension') {
+            dmMessage = `## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT\n## 🟣 Suspension\n\n**Hello, ${targetMention}**\n\nYou have been placed under Suspension by the Lagging Legends Server Administration. During this time, your permissions and access within the community are restricted.\n\n**Reason:** ${reason}\n**Evidence:** ${evidence}\n**Case ID:** #${caseNumber}\n\n*Your status will be reviewed by management.*`;
+            await target.roles.add("1497462427267239936"); // Suspension Role
+        }
+        else if (type === 'Termination') {
+            dmMessage = `## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT\n## 🟤 Termination\n\n**Hello, ${targetMention}**\n\nYou have been Terminated from your position within the Lagging Legends Community by the Server Administration. Your roles and responsibilities have been removed.\n\n**Reason:** ${reason}\n**Evidence:** ${evidence}\n**Case ID:** #${caseNumber}`;
+        }
+        else if (type === 'Kick') {
+            dmMessage = `## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT\n## ⚫️ Kick\n\n**Hello, ${targetMention}**\n\nYou have been Kicked from the Lagging Legends Community by the Server Administration. You may rejoin, but please ensure you follow all rules upon your return.\n\n**Reason:** ${reason}\n**Evidence:** ${evidence}\n**Case ID:** #${caseNumber}`;
+            setTimeout(() => target.kick(reason), 3000);
+        }
+        else if (type === 'Ban') {
+            dmMessage = `## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT\n## ⚫️ Ban\n\n**Hello, ${targetMention}**\n\nYou have been Banned from the Lagging Legends Community by the Server Administration. This is a permanent removal unless successfully appealed.\n\n**Reason:** ${reason}\n**Evidence:** ${evidence}\n**Case ID:** #${caseNumber}`;
+            setTimeout(() => target.ban({ reason }), 3000);
+        }
+
+        // Send DM and Log to DB
+        try { await target.send(dmMessage); } catch (e) { console.log("Could not DM user."); }
+        
+        targetDB.punishments.push({ caseNumber, type, reason, evidence, date: new Date(), active: true });
+        await targetDB.save();
+
+        // Log to Modlogs
+        const logChan = client.channels.cache.get(CHANNELS.LOGS);
+        if (logChan) {
+            logChan.send(`🚨 **New Punishment**\n**Case:** #${caseNumber}\n**Target:** ${target.user.tag}\n**Moderator:** ${interaction.user.tag}\n**Type:** ${type}\n**Reason:** ${reason}`);
+        }
+
+        return interaction.reply({ content: `✅ Successfully issued **${type}** to <@${target.id}> (Case #${caseNumber})`, ephemeral: true });
+    }
+
+    // --- TIMEOUT COMMAND ---
+    if (interaction.commandName === 'timeout') {
+        const target = interaction.options.getMember('user');
+        const duration = interaction.options.getInteger('duration'); 
+        const reason = interaction.options.getString('reason');
+        const evidence = interaction.options.getString('evidence');
+
+        const ms = duration * 60 * 1000;
+        await target.timeout(ms, reason);
+
+        const dmMsg = `## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT\n## ⚫️ Mute\n\n**Hello, <@${target.id}>**\n\nYou have been Muted by the Lagging Legends Server Administration. During this time, you will be unable to send messages or participate in voice chats.\n\n**Duration:** ${duration} minutes\n**Reason:** ${reason}\n**Evidence:** ${evidence}`;
+        
+        try { await target.send(dmMsg); } catch (e) { }
+        
+        return interaction.reply({ content: `✅ Muted <@${target.id}> for ${duration} minutes.`, ephemeral: true });
+    }
+
+    // --- PUNISH REVERT COMMAND ---
+    if (interaction.commandName === 'punish_revert') {
+        // Permission Check: Specific Role ID 1494275716043374743
+        if (!interaction.member.roles.cache.has("1494275716043374743")) {
+            return interaction.reply({ content: "❌ Only the Head of Promotions can revert punishments.", ephemeral: true });
+        }
+
+        const targetUser = interaction.options.getUser('user');
+        const caseId = interaction.options.getInteger('case_number');
+        const reason = interaction.options.getString('reason');
+        const evidence = interaction.options.getString('evidence');
+
+        const targetDB = await getDB(targetUser.id);
+        const punishmentIndex = targetDB.punishments.findIndex(p => p.caseNumber === caseId && p.active);
+
+        if (punishmentIndex === -1) {
+            return interaction.reply({ content: "⚠️ Case number not found or already reverted.", ephemeral: true });
+        }
+
+        const punishment = targetDB.punishments[punishmentIndex];
+        punishment.active = false; 
+        
+        // FIX 1: Tell Mongoose the array changed
+        targetDB.markModified('punishments');
+        await targetDB.save();
+
+        // Handle Role/Action Reversal
+        const member = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
+        
+        if (punishment.type === 'Suspension' && member) {
+            await member.roles.remove("1497462427267239936").catch(() => null);
+        }
+        
+        // FIX 2: Handle Timeout Reversal
+        if (punishment.type === 'Timeout' && member) {
+            await member.timeout(null).catch(() => null);
+        }
+
+        if (punishment.type === 'Ban') {
+            await interaction.guild.bans.fetch(targetUser.id)
+                .then(() => interaction.guild.members.unban(targetUser.id))
+                .catch(() => null);
+        }
+
+        // --- REVERSAL DM TEMPLATES (EXACT TEXT - UNCHANGED) ---
+        let revertDM = "";
+        const targetMention = `<@${targetUser.id}>`;
+
+        if (punishment.type === 'Verbal') {
+            revertDM = `🔴 Verbal Warning Reverted  \n\n## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT REVERSAL\n\nHello, ${targetMention}\n\nYour Verbal Warning issued by the Lagging Legends Server Administration has been reverted and removed from your moderation record within Lagging Legends Community.\n\nReason: ${reason}  \nEvidence: ${evidence}\n\nPlease continue following all Lagging Legends Community rules and expectations. Repeating similar behavior may result in further disciplinary action.`;
+        } else if (punishment.type === 'Staff') {
+            revertDM = `🟡 Staff Warning Reverted  \n\n## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT REVERSAL\n\nHello, ${targetMention}\n\nYour Staff Warning issued by the Lagging Legends Server Administration has been reverted and removed from your moderation record within Lagging Legends Community.\n\nReason: ${reason}  \nEvidence: ${evidence}\n\nContinued issues in Lagging Legends Community may result in new or stronger disciplinary action.`;
+        } else if (punishment.type === 'Suspension') {
+            revertDM = `🟣 Suspension Reverted  \n\n## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT REVERSAL\n\nHello, ${targetMention}\n\nYour Suspension issued by the Lagging Legends Server Administration has been reverted, and your access and permissions within Lagging Legends Community have been restored.\n\nReason: ${reason}  \nEvidence: ${evidence}\n\nFuture violations in Lagging Legends Community may result in reinstated or stronger disciplinary action.`;
+        } else if (punishment.type === 'Termination') {
+            revertDM = `🟤 Termination Reverted  \n\n## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT REVERSAL\n\nHello, ${targetMention}\n\nYour Termination issued by the Lagging Legends Server Administration has been reverted, and your staff position within Lagging Legends Community has been restored.\n\nReason: ${reason}  \nEvidence: ${evidence}\n\nThis restoration in Lagging Legends Community is conditional and may be revoked if expectations are not met.`;
+        } else if (punishment.type === 'Kick') {
+            revertDM = `⚫️ Kick Record Removed  \n\n## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT REVERSAL\n\nHello, ${targetMention}\n\nYour Kick issued by the Lagging Legends Server Administration has been removed from your moderation logs within Lagging Legends Community. This record no longer appears in your official history.\n\nReason: ${reason}  \nEvidence: ${evidence}\n\nRepeated disruptive behavior in Lagging Legends Community may result in stronger disciplinary action, including mute, suspension, or ban.`;
+        } else if (punishment.type === 'Ban') {
+            revertDM = `⚫️ Ban Reverted  \n\n## LAGGING LEGENDS COMMUNITY — OFFICIAL NOTICE OF PUNISHMENT REVERSAL\n\nHello, ${targetMention}\n\nYour Ban from Lagging Legends issued by the Lagging Legends Server Administration has been reverted, and your access to Lagging Legends Community has been restored.\n\nReason: ${reason}  \nEvidence: ${evidence}\n\nThis reinstatement in Lagging Legends Community is conditional. Further severe violations may result in permanent removal without additional warning.`;
+        }
+
+        try { await targetUser.send(revertDM); } catch (e) { }
+
+        // Log the Reversal
+        const logChan = client.channels.cache.get(CHANNELS.LOGS);
+        if (logChan) {
+            logChan.send(`✅ **Punishment Reverted**\n**Original Case:** #${caseId}\n**Target:** ${targetUser.tag}\n**Reverted By:** ${interaction.user.tag}\n**Reason:** ${reason}`);
+        }
+
+        return interaction.reply({ content: `✅ Punishment for Case #${caseId} has been successfully reverted.`, ephemeral: true });
+    }
+
+    // --- STORE COMMAND: VIEW ---
+    if (interaction.commandName === 'view_store') {
+        const storeFront = `
+## 🛒 LAGGING LEGENDS OFFICIAL STORE
+*Use \`/buy_item [item_id]\` to purchase.*
+
+**1. Custom Role Color** — 50 Points
+> Get a unique color for your name in the member list. (ID: \`color\`)
+**2. Priority Ticket** — 30 Points
+> Your tickets will be moved to the top of the queue. (ID: \`priority\`)
+**3. Punishment Wipe** — 150 Points
+> Removes one 'Active' Verbal or Staff Warning from your record. (ID: \`wipe\`)
+**4. Mystery Box** — 20 Points
+> A 50/50 chance to win 40 points or lose 10. (ID: \`mystery\`)
+**5. Booster Badge** — 10 Points
+> Get a temporary "Store Supporter" badge next to your name. (ID: \`badge\`)
+`;
+        return interaction.reply({ content: storeFront, ephemeral: true });
+    }
+
+    // --- STORE COMMAND: BUY ---
+    if (interaction.commandName === 'buy_item') {
+        const item = interaction.options.getString('item_id');
+        const shopLogs = client.channels.cache.get(CHANNELS.LOGS);
+
+        // Helper to handle point deduction and logging without double-replying
+        const checkAndDeduct = async (cost, itemName) => {
+            if (db.points < cost) return { success: false, error: `❌ You need **${cost} Points**, but you only have **${db.points}**.` };
+            
+            db.points -= cost;
+            await db.save();
+            if (shopLogs) shopLogs.send(`🛍️ **New Purchase**: <@${interaction.user.id}> bought **${itemName}** for ${cost} points.`);
+            return { success: true };
+        };
+
+        switch (item) {
+            case 'color': {
+                const result = await checkAndDeduct(50, "Custom Role Color");
+                if (!result.success) return interaction.reply({ content: result.error, ephemeral: true });
+                return interaction.reply({ content: "✅ Purchase successful! Please DM a Manager with your desired Hex Code.", ephemeral: true });
+            }
+
+            case 'priority': {
+                const result = await checkAndDeduct(30, "Priority Ticket");
+                if (!result.success) return interaction.reply({ content: result.error, ephemeral: true });
+                
+                db.tags = db.tags || [];
+                if (!db.tags.includes("Priority")) db.tags.push("Priority");
+                db.markModified('tags');
+                await db.save();
+                return interaction.reply({ content: "✅ You now have **Priority Ticket** status!", ephemeral: true });
+            }
+
+            case 'wipe': {
+                const activeWarning = db.punishments.find(p => p.active && (p.type === 'Verbal' || p.type === 'Staff'));
+                if (!activeWarning) return interaction.reply({ content: "❌ You don't have any active warnings to wipe!", ephemeral: true });
+                
+                const result = await checkAndDeduct(150, "Punishment Wipe");
+                if (!result.success) return interaction.reply({ content: result.error, ephemeral: true });
+
+                activeWarning.active = false;
+                db.markModified('punishments');
+                await db.save();
+                return interaction.reply({ content: `✅ Successfully wiped Case **#${activeWarning.caseNumber}** from your active record.`, ephemeral: true });
+            }
+
+            case 'mystery': {
+                const result = await checkAndDeduct(20, "Mystery Box");
+                if (!result.success) return interaction.reply({ content: result.error, ephemeral: true });
+
+                const win = Math.random() > 0.5;
+                if (win) {
+                    db.points += 40;
+                    await db.save();
+                    return interaction.reply({ content: "🎁 **JACKPOT!** You won **40 Points**!", ephemeral: true });
+                } else {
+                    return interaction.reply({ content: "💨 The box was empty. Better luck next time!", ephemeral: true });
+                }
+            }
+
+            case 'badge': {
+                const result = await checkAndDeduct(10, "Booster Badge");
+                if (!result.success) return interaction.reply({ content: result.error, ephemeral: true });
+                return interaction.reply({ content: "✨ Enjoy your new **Store Supporter** badge in the shop records!", ephemeral: true });
+            }
+
+            default:
+                return interaction.reply({ content: "❓ Unknown Item ID. Use \`/view_store\` to see valid IDs.", ephemeral: true });
+        }
+    }
+
+    // --- QUOTA SYSTEM: ADD ---
+    if (interaction.commandName === 'add_quota') {
+        if (!interaction.member.roles.cache.has("1494275716043374743")) {
+            return interaction.reply({ content: "❌ Only Management can update quotas.", ephemeral: true });
+        }
+
+        const targetUser = interaction.options.getUser('user');
+        const amount = interaction.options.getInteger('amount');
+        const targetDB = await getDB(targetUser.id);
+
+        targetDB.quota = (targetDB.quota || 0) + amount;
+        await targetDB.save();
+
+        return interaction.reply({ content: `✅ Added **${amount}** to <@${targetUser.id}>'s weekly quota. (Total: ${targetDB.quota})`, ephemeral: true });
+    }
+
+    // --- QUOTA SYSTEM: VIEW ---
+    if (interaction.commandName === 'view_quota') {
+        const target = interaction.options.getUser('user') || interaction.user;
+        const targetDB = await getDB(target.id);
+        const currentQuota = targetDB.quota || 0;
+        const requirement = 10; 
+
+        const status = currentQuota >= requirement ? "✅ **Met**" : "⚠️ **Incomplete**";
+
+        return interaction.reply({
+            content: `### Staff Quota: <@${target.id}>\n**Current Progress:** ${currentQuota} / ${requirement}\n**Status:** ${status}`,
+            ephemeral: true
+        });
+    }
+
+    // --- GIVEAWAY START ---
+    if (interaction.commandName === 'giveaway_start') {
+        // Management Permission Check (Head of Promotions Role)
+        if (!interaction.member.roles.cache.has("1494275716043374743")) {
+            return interaction.reply({ content: "❌ You do not have permission to start giveaways.", ephemeral: true });
+        }
+
+        const prize = interaction.options.getString('prize');
+        const duration = interaction.options.getInteger('duration'); 
+        const winnerCount = interaction.options.getInteger('winners') || 1;
+        const channel = interaction.options.getChannel('channel') || interaction.channel;
+
+        const endTime = Date.now() + (duration * 60 * 1000);
+        const giveawayEntries = new Set();
+
+        const embed = {
+            title: "🎁 NEW GIVEAWAY!",
+            description: `**Prize:** ${prize}\n**Winners:** ${winnerCount}\n**Ends:** <t:${Math.floor(endTime / 1000)}:R>\n**Hosted By:** ${interaction.user}`,
+            color: 0x5865F2,
+            footer: { text: "Click the button below to enter!" }
+        };
+
+        const row = {
+            type: 1,
+            components: [{
+                type: 2, label: "Enter Giveaway", style: 1, custom_id: `giveaway_enter_${interaction.id}`
+            }]
+        };
+
+        const msg = await channel.send({ embeds: [embed], components: [row] });
+        await interaction.reply({ content: "✅ Giveaway started!", ephemeral: true });
+
+        // Collector for entries
+        const collector = msg.createMessageComponentCollector({ 
+            filter: i => i.customId === `giveaway_enter_${interaction.id}`,
+            time: duration * 60 * 1000 
+        });
+
+        collector.on('collect', async i => {
+            if (giveawayEntries.has(i.user.id)) {
+                return i.reply({ content: "⚠️ You have already entered this giveaway!", ephemeral: true });
+            }
+            giveawayEntries.add(i.user.id);
+            await i.reply({ content: "✅ You have successfully entered the giveaway!", ephemeral: true });
+        });
+
+        collector.on('end', async () => {
+            const participants = Array.from(giveawayEntries);
+            const winners = [];
+
+            if (participants.length < winnerCount) {
+                const disabledRow = { type: 1, components: [{ type: 2, label: "Giveaway Ended", style: 2, custom_id: "ended", disabled: true }] };
+                await msg.edit({ components: [disabledRow] });
+                return channel.send(`⚠️ Giveaway ended, but there weren't enough participants for **${prize}**.`);
+            }
+
+            for (let i = 0; i < winnerCount; i++) {
+                const pick = participants.splice(Math.floor(Math.random() * participants.length), 1)[0];
+                winners.push(`<@${pick}>`);
+            }
+
+            const disabledRow = {
+                type: 1,
+                components: [{
+                    type: 2, label: "Giveaway Ended", style: 2, custom_id: "ended", disabled: true
+                }]
+            };
+
+            await msg.edit({ components: [disabledRow] });
+            channel.send(`🎉 **Giveaway Ended!**\n**Prize:** ${prize}\n**Winners:** ${winners.join(', ')}\nCongratulations!`);
+        });
+    }
+
+client.on('messageCreate', async (message) => {
+    // Only trigger in the specific Counting channel
+    if (message.author.bot || message.channel.id !== CHANNELS.COUNTING) return;
+
+    // Use findOneAndUpdate to prevent race conditions (two people counting at once)
+    const globalDB = await Global.findOneAndUpdate(
+        { guildId: message.guild.id },
+        { $setOnInsert: { currentCount: 0, lastCounter: "" } },
+        { upsert: true, new: true }
+    );
+
+    const userNumber = parseInt(message.content);
+    const nextNumber = globalDB.currentCount + 1;
+
+    if (isNaN(userNumber)) return;
+
+    // Error: Wrong Number or Double Counting
+    if (userNumber !== nextNumber || globalDB.lastCounter === message.author.id) {
+        let errorMsg = userNumber !== nextNumber 
+            ? `❌ **WRONG NUMBER!** <@${message.author.id}> ruined it at **${userNumber}**.` 
+            : `🚫 **STRICT RULE:** <@${message.author.id}>, you cannot count twice in a row!`;
+            
+        globalDB.currentCount = 0;
+        globalDB.lastCounter = "";
+        await globalDB.save();
+        message.react("❌");
+        return message.reply(`${errorMsg} The count has been reset to **0**.`);
+    }
+
+    // Success
+    globalDB.currentCount = nextNumber;
+    globalDB.lastCounter = message.author.id;
+    await globalDB.save();
+    message.react("✅");
+
+    // Milestone Reward (Every 50 counts)
+    if (nextNumber % 50 === 0) {
+        const userDB = await getDB(message.author.id);
+        userDB.points += 5;
+        await userDB.save();
+        message.channel.send(`🎊 **MILESTONE!** We reached **${nextNumber}**! <@${message.author.id}> earned **5 Points**.`);
+    }
+});
+
+// --- THE BOT LOGIN ---
+client.login('YOUR_DISCORD_TOKEN_HERE');
+
